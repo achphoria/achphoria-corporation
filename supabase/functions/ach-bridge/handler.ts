@@ -25,7 +25,7 @@ export const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'w
 export const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'] as const;
 export const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'] as const;
 export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal'] as const;
-export const VERSION = 'v4.0.0';
+export const VERSION = 'v4.1.0';
 export const TASK_EVENTS = ['gagal', 'approval'] as const;
 /** Judul grup yang otomatis dianggap grup log (feed saja). */
 export const LOG_TITLE = /\bLOGS\b/i;
@@ -71,6 +71,46 @@ export interface Deps {
 /* Utilitas umum                                                       */
 /* ------------------------------------------------------------------ */
 const enc = new TextEncoder();
+
+
+/* ---------- file (send-photo / send-file) ---------- */
+export const PHOTO_MAX = 10 * 1024 * 1024;
+export const DOC_MAX = 20 * 1024 * 1024;
+export type FileKind = 'png' | 'jpg' | 'pdf';
+const EXT_KIND: Record<string, FileKind> = { png: 'png', jpg: 'jpg', jpeg: 'jpg', pdf: 'pdf' };
+export const MIME: Record<FileKind, string> = { png: 'image/png', jpg: 'image/jpeg', pdf: 'application/pdf' };
+/** Jenis file dari magic bytes (PNG / JPEG / PDF) atau null. */
+export function sniffKind(b: Uint8Array): FileKind | null {
+  if (b.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => b[i] === v)) return 'png';
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (b.length >= 5 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2d) return 'pdf';
+  return null;
+}
+/** Validasi nama + isi; kembalikan jenis atau pesan error. */
+export function checkFile(name: string, bytes: Uint8Array, mode: 'photo' | 'document'): { kind: FileKind } | { error: string } {
+  const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? '').toLowerCase();
+  const byExt = EXT_KIND[ext];
+  const allowed: FileKind[] = mode === 'photo' ? ['png', 'jpg'] : ['png', 'jpg', 'pdf'];
+  if (!byExt || !allowed.includes(byExt)) return { error: `ekstensi .${ext || '?'} tidak didukung untuk ${mode === 'photo' ? 'send-photo (png/jpg)' : 'send-file (pdf/png/jpg)'}` };
+  if (!bytes.length) return { error: 'file kosong' };
+  const sniff = sniffKind(bytes);
+  if (sniff !== byExt) return { error: `isi file tidak cocok dengan ekstensi .${ext} (magic bytes: ${sniff ?? 'tidak dikenal'})` };
+  const max = mode === 'photo' ? PHOTO_MAX : DOC_MAX;
+  if (mode === 'document' && bytes.length > max) return { error: `file terlalu besar (${(bytes.length / 1048576).toFixed(1)}MB > ${max / 1048576}MB)` };
+  if (mode === 'photo' && bytes.length > DOC_MAX) return { error: `file terlalu besar (${(bytes.length / 1048576).toFixed(1)}MB > ${DOC_MAX / 1048576}MB)` };
+  return { kind: byExt };
+}
+export function b64decode(s: string): Uint8Array {
+  const bin = atob(s.replace(/^data:[^,]*,/, '').replace(/\s+/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+/** Nama file aman untuk Telegram (tanpa path / karakter kontrol). */
+export function safeName(n: string): string {
+  const base = String(n).split(/[\\/]/).pop()!.replace(/[\x00-\x1f"]/g, '').trim();
+  return (base || 'file').slice(0, 120);
+}
 
 /** Perbandingan waktu-konstan (hash SHA-256 dulu supaya panjang tidak bocor). */
 export async function safeEqual(a: string | null | undefined, b: string | null | undefined): Promise<boolean> {
@@ -293,6 +333,53 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     } catch (e) {
       return { ok: false, description: redact(e) };
     }
+  }
+
+
+  /** Panggilan Telegram multipart (unggah file). */
+  async function tgUpload(bot: AgentId, method: string, fields: Record<string, string>, field: string, bytes: Uint8Array, name: string, mime: string, timeoutMs = 60000): Promise<Json> {
+    const token = env('TG_TOKEN_' + UP(bot));
+    if (!token) return { ok: false, description: 'TG_TOKEN_' + UP(bot) + ' belum di-set' };
+    const base = (env('TG_API_BASE') ?? 'https://api.telegram.org').replace(/\/+$/, '');
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
+    form.append(field, new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }), name);
+    try {
+      const res = await f(`${base}/bot${token}/${method}`, { method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs) });
+      const j = await res.json().catch(() => ({ ok: false, description: 'HTTP ' + res.status }));
+      if (!j.ok) j.description = redact(j.description ?? 'HTTP ' + res.status);
+      return j;
+    } catch (e) {
+      return { ok: false, description: redact(e) };
+    }
+  }
+
+  /** Kirim foto/dokumen (+ fallback sendPhoto → sendDocument) dan catat ke ach_outbox. */
+  async function sendFile(bot: AgentId, chatId: number, mode: 'photo' | 'document', kind: FileKind, bytes: Uint8Array, name: string,
+    opts: { caption?: string | null; replyTo?: number | null; silent?: boolean }) {
+    const fields: Record<string, string> = { chat_id: String(chatId) };
+    if (opts.caption) fields.caption = opts.caption;
+    if (opts.silent) fields.disable_notification = 'true';
+    if (opts.replyTo) fields.reply_parameters = JSON.stringify({ message_id: opts.replyTo, allow_sending_without_reply: true });
+    let method = 'sendDocument', r: Json = null, fallback: string | null = null;
+    if (mode === 'photo') {
+      if (bytes.length > PHOTO_MAX) fallback = `foto > ${PHOTO_MAX / 1048576}MB`;
+      else {
+        method = 'sendPhoto';
+        r = await tgUpload(bot, 'sendPhoto', fields, 'photo', bytes, name, MIME[kind]);
+        if (!r.ok && /PHOTO|IMAGE|DIMENSION|too big|too large|wrong file|invalid/i.test(String(r.description ?? ''))) {
+          fallback = String(r.description); r = null; method = 'sendDocument';
+        }
+      }
+    }
+    if (!r) r = await tgUpload(bot, 'sendDocument', fields, 'document', bytes, name, MIME[kind]);
+    const row = {
+      bot, chat_id: chatId, text: `[${method === 'sendPhoto' ? 'photo' : 'document'}] ${name}${opts.caption ? ' — ' + opts.caption : ''}`,
+      reply_to_message_id: opts.replyTo ?? null, telegram_message_id: r.ok ? r.result?.message_id ?? null : null,
+      ok: !!r.ok, error: r.ok ? null : String(r.description ?? 'gagal'),
+    };
+    try { await db('ach_outbox', { method: 'POST', body: row, prefer: 'return=minimal' }); } catch (e) { warn('outbox gagal:', redact(e)); }
+    return { ok: !!r.ok, method, fallback, message_id: r.ok ? r.result?.message_id ?? null : null, error: row.error };
   }
 
   /** Kirim teks (dipecah bila panjang) + catat ke ach_outbox. */
@@ -751,6 +838,19 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     return first === undefined ? null : Number(first);
   }
 
+  /** chat_id eksplisit (harus dikenal bot) atau default chat pribadi owner. */
+  async function resolveChat(bot: AgentId, raw: unknown): Promise<number> {
+    let chatId = intOrNull(raw, 'chat_id');
+    if (chatId === null) {
+      chatId = await ownerChat(bot);
+      if (chatId === null) throw new HttpError(409, `belum ada chat pribadi owner dengan @${botUsername(bot)} — owner perlu kirim /start ke bot ini dulu`);
+    } else {
+      const known: Json[] = await db(`ach_tg_chats?select=chat_id&bot=eq.${bot}&chat_id=eq.${chatId}&limit=1`);
+      if (!known.length) throw new HttpError(403, `chat ${chatId} belum dikenal oleh @${botUsername(bot)} (lihat action 'chats')`);
+    }
+    return chatId;
+  }
+
   const TASK_COLS = 'id,title,status,agent_id';
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   /** Cari tugas berdasarkan id (uuid penuh atau 8 karakter awal, mis. dari "Tugas #1a2b3c4d") atau judul (agen ini, utamakan yang belum Selesai). */
@@ -874,14 +974,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const parseMode = body.parse_mode ? String(body.parse_mode) : null;
         if (parseMode && parseMode !== 'HTML') throw new HttpError(400, "parse_mode hanya boleh 'HTML' (default teks biasa)");
         if (parseMode && text.length > TG_LIMIT) throw new HttpError(400, 'pesan HTML > 4000 karakter; kirim sebagai teks biasa atau pecah sendiri');
-        let chatId = intOrNull(body.chat_id, 'chat_id');
-        if (chatId === null) {
-          chatId = await ownerChat(bot);
-          if (chatId === null) throw new HttpError(409, `belum ada chat pribadi owner dengan @${botUsername(bot)} — owner perlu kirim /start ke bot ini dulu`);
-        } else {
-          const known: Json[] = await db(`ach_tg_chats?select=chat_id&bot=eq.${bot}&chat_id=eq.${chatId}&limit=1`);
-          if (!known.length) throw new HttpError(403, `chat ${chatId} belum dikenal oleh @${botUsername(bot)} (lihat action 'chats')`);
-        }
+        const chatId = await resolveChat(bot, body.chat_id);
         const inboxId = intOrNull(body.inbox_id, 'inbox_id');
         const r = await sendText(bot, chatId, text, { replyTo: intOrNull(body.reply_to_message_id, 'reply_to_message_id'), parseMode, silent: !!body.silent });
         if (inboxId && r.ok) {
@@ -889,6 +982,33 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         }
         if (!r.ok) throw new HttpError(502, 'telegram: ' + (r.results.find((x) => !x.ok)?.error ?? 'gagal'));
         return { ok: true, chat_id: chatId, parts: r.parts, message_ids: r.results.map((x) => x.message_id), inbox_done: !!inboxId };
+      }
+      case 'send_photo':
+      case 'send_file': {
+        const bot = needBot(body.bot);
+        const mode = action === 'send_photo' ? 'photo' : 'document';
+        const name = safeName(str(body.filename) ?? '');
+        const data = str(body.file_base64);
+        if (!data) throw new HttpError(400, 'file_base64 wajib');
+        if (data.length > Math.ceil(DOC_MAX / 3) * 4 + 128) throw new HttpError(413, `file terlalu besar (maks ${DOC_MAX / 1048576}MB)`);
+        let bytes: Uint8Array;
+        try { bytes = b64decode(data); } catch { throw new HttpError(400, 'file_base64 tidak valid'); }
+        const chk = checkFile(name, bytes, mode);
+        if ('error' in chk) throw new HttpError(/terlalu besar/.test(chk.error) ? 413 : 400, chk.error);
+        const caption = str(body.caption);
+        if (caption !== null) {
+          if (caption.length > 1024) throw new HttpError(400, 'caption maks 1024 karakter');
+          const why = sensitiveReason(caption);
+          if (why) throw new HttpError(400, `caption ditolak: ${why}.`);
+        }
+        const chatId = await resolveChat(bot, body.chat_id);
+        const inboxId = intOrNull(body.inbox_id, 'inbox_id');
+        const r = await sendFile(bot, chatId, mode, chk.kind, bytes, name, { caption, replyTo: intOrNull(body.reply_to_message_id, 'reply_to_message_id'), silent: !!body.silent });
+        if (!r.ok) throw new HttpError(502, 'telegram: ' + (r.error ?? 'gagal'));
+        if (inboxId) {
+          await db(`ach_inbox?id=eq.${inboxId}&bot=eq.${bot}`, { method: 'PATCH', prefer: 'return=minimal', body: { status: 'selesai', handled_at: now().toISOString() } });
+        }
+        return { ok: true, chat_id: chatId, method: r.method, fallback: r.fallback, message_id: r.message_id, bytes: bytes.length, inbox_done: !!inboxId };
       }
       case 'typing': {
         const bot = needBot(body.bot);
@@ -997,7 +1117,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         return { ok: true, count: rows.length, rows };
       }
       default:
-        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, typing, inbox, claim, done, fail, report, task, log, chats, ping');
+        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, send_photo, send_file, typing, inbox, claim, done, fail, report, task, log, chats, ping');
     }
   }
 

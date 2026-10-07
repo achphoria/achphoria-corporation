@@ -14,6 +14,8 @@
  *   node tools/ach.mjs report --bot research --status kerja --location desk --activity "riset tren" \
  *        --task "Riset tren skincare" --task-status "Sedang kerja" --log "mulai riset"
  *   node tools/ach.mjs send  --bot research --text "Siap, aku cek dulu ya" --inbox 12 [--chat <id>] [--reply <msgid>]
+ *   node tools/ach.mjs send-photo --bot research --file /tmp/grafik.png [--caption ".."] [--chat <id>] [--reply <msgid>] [--inbox 12]
+ *   node tools/ach.mjs send-file  --bot research --file /tmp/laporan.pdf [--caption ".."]
  *   node tools/ach.mjs inbox --bot research [--status baru|diproses|selesai|gagal|semua] [--limit 20]
  *   node tools/ach.mjs claim 12 · done 12 --note "beres" · fail 12 --note "butuh akses"
  *   node tools/ach.mjs chats --bot chief          (cari chat_id grup ACHPHORIA HQ)
@@ -25,7 +27,7 @@
  */
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_URL = 'https://ckoejqzownrujikefgwb.supabase.co/functions/v1/ach-bridge';
@@ -37,7 +39,7 @@ export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal', 'semua'];
 export const TASK_EVENTS = ['new', 'start', 'done', 'fail', 'approval'];
 const REPORT_TASK_EVENTS = ['gagal', 'approval'];
 const BOOL_FLAGS = new Set(['html', 'silent', 'full', 'json', 'dry_run', 'help']);
-const COMMANDS = ['report', 'send', 'typing', 'inbox', 'claim', 'done', 'fail', 'task', 'log', 'chats', 'ping'];
+const COMMANDS = ['report', 'send', 'send-photo', 'send-file', 'typing', 'inbox', 'claim', 'done', 'fail', 'task', 'log', 'chats', 'ping'];
 
 export const HELP = `ACHPHORIA · CLI jembatan Telegram (ach-bridge)
 
@@ -49,6 +51,9 @@ Pemakaian: node tools/ach.mjs <perintah> [opsi]
   send    --bot <id> (--text <teks> | --text-file <path> | --text -  [stdin])
           [--chat <chat_id>] [--reply <message_id>] [--inbox <inbox_id>] [--html] [--silent]
           (tanpa --chat → chat pribadi owner dengan bot ini)
+  send-photo --bot <id> --file <png|jpg> [--caption <teks>] [--chat <id>] [--reply <msg_id>] [--inbox <id>] [--silent]
+  send-file  --bot <id> --file <pdf|png|jpg> [--caption <teks>] [...sama]
+          foto maks 10MB (lebih besar/ditolak → otomatis dikirim sebagai dokumen), dokumen maks 20MB
   typing  --bot <id> [--chat <chat_id>]
   inbox   --bot <id> [--status baru|diproses|selesai|gagal|semua] [--limit N] [--full]
   claim   <inbox_id> [--bot <id>]          tandai 'diproses' (gagal bila sudah diklaim)
@@ -72,6 +77,29 @@ Tugas   : "Sedang kerja" | Terjadwal | Selesai
 Grup LOGS: report/task otomatis memposting 📋 tugas baru, 🔄 mulai, ✅ selesai, ❌ gagal, ⏳ nunggu approval`;
 
 export class UsageError extends Error {}
+
+export const PHOTO_MAX = 10 * 1024 * 1024;
+export const DOC_MAX = 20 * 1024 * 1024;
+const EXT_KIND = { png: 'png', jpg: 'jpg', jpeg: 'jpg', pdf: 'pdf' };
+/** Jenis file dari magic bytes (sama dengan server). */
+export function sniffKind(b) {
+  if (b.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => b[i] === v)) return 'png';
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+  if (b.length >= 5 && String.fromCharCode(...b.subarray(0, 5)) === '%PDF-') return 'pdf';
+  return null;
+}
+/** Validasi lokal sebelum unggah; lempar UsageError bila tidak valid. */
+export function checkLocalFile(name, bytes, mode) {
+  const ext = (/\.([a-z0-9]+)$/i.exec(name)?.[1] ?? '').toLowerCase();
+  const kind = EXT_KIND[ext];
+  const allowed = mode === 'photo' ? ['png', 'jpg'] : ['png', 'jpg', 'pdf'];
+  if (!kind || !allowed.includes(kind)) throw new UsageError(`ekstensi .${ext || '?'} tidak didukung (${mode === 'photo' ? 'png/jpg' : 'pdf/png/jpg'})`);
+  if (!bytes.length) throw new UsageError('file kosong');
+  const sniff = sniffKind(bytes);
+  if (sniff !== kind) throw new UsageError(`isi file tidak cocok dengan ekstensi .${ext} (terdeteksi: ${sniff ?? 'tidak dikenal'})`);
+  if (bytes.length > DOC_MAX) throw new UsageError(`file terlalu besar (${(bytes.length / 1048576).toFixed(1)}MB > 20MB)`);
+  return kind;
+}
 
 /** Parser argumen: --k v, --k=v, flag boolean, sisanya posisional. Kunci '-' → '_'. */
 export function parseArgs(argv) {
@@ -111,7 +139,7 @@ const int = (v, name) => {
 const optInt = (v, name) => (v === undefined ? undefined : int(v, name));
 
 /** Bangun body JSON untuk /api dari argumen. readText(path|'-') dipakai untuk --text-file / stdin. */
-export function buildRequest(parsed, { env = process.env, readText } = {}) {
+export function buildRequest(parsed, { env = process.env, readText, readFile } = {}) {
   const { cmd, pos, opts } = parsed;
   if (!cmd || opts.help) throw new UsageError('');
   if (!COMMANDS.includes(cmd)) throw new UsageError(`perintah "${cmd}" tidak dikenal. Pilihan: ${COMMANDS.join(', ')}`);
@@ -172,6 +200,29 @@ export function buildRequest(parsed, { env = process.env, readText } = {}) {
       if (opts.inbox !== undefined) b.inbox_id = int(opts.inbox, '--inbox');
       if (opts.html) b.parse_mode = 'HTML';
       if (opts.silent) b.silent = true;
+      return b;
+    }
+    case 'send-photo':
+    case 'send-file': {
+      const mode = cmd === 'send-photo' ? 'photo' : 'document';
+      const b = { action: cmd === 'send-photo' ? 'send_photo' : 'send_file', bot: needBot() };
+      const file = opts.file ?? pos[0];
+      if (!file || file === true) throw new UsageError('--file <path> wajib');
+      if (!readFile) throw new UsageError('--file tidak didukung di sini');
+      const bytes = readFile(String(file));
+      checkLocalFile(String(file), bytes, mode);
+      b.filename = basename(String(file));
+      if (opts.caption !== undefined) {
+        const why = sensitiveReason(opts.caption);
+        if (why) throw new UsageError(`--caption ditolak: ${why}.`);
+        if (String(opts.caption).length > 1024) throw new UsageError('--caption maks 1024 karakter');
+        b.caption = String(opts.caption);
+      }
+      if (opts.chat !== undefined) b.chat_id = int(opts.chat, '--chat');
+      if (opts.reply !== undefined) b.reply_to_message_id = int(opts.reply, '--reply');
+      if (opts.inbox !== undefined) b.inbox_id = int(opts.inbox, '--inbox');
+      if (opts.silent) b.silent = true;
+      b.file_base64 = Buffer.from(bytes).toString('base64');
       return b;
     }
     case 'typing': {
@@ -264,6 +315,13 @@ export async function main(argv = process.argv.slice(2), { env = process.env, fe
     body = buildRequest(parsed, {
       env,
       readText: (p) => (p === '-' ? readFileSync(0, 'utf8') : readFileSync(p, 'utf8')),
+      readFile: (p) => {
+        let st;
+        try { st = statSync(p); } catch { throw new UsageError(`file tidak ditemukan: ${p}`); }
+        if (!st.isFile()) throw new UsageError(`bukan file: ${p}`);
+        if (st.size > DOC_MAX) throw new UsageError(`file terlalu besar (${(st.size / 1048576).toFixed(1)}MB > 20MB)`);
+        return new Uint8Array(readFileSync(p));
+      },
     });
   } catch (e) {
     if (e instanceof UsageError) {
@@ -276,7 +334,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, fe
   }
   const url = String(parsed.opts.url ?? env.ACH_BRIDGE_URL ?? DEFAULT_URL).replace(/\/+$/, '') + '/api';
   if (parsed.opts.dry_run) {
-    out(JSON.stringify({ url, body }, null, 2));
+    const shown = body.file_base64 ? { ...body, file_base64: `<${body.file_base64.length} karakter base64>` } : body;
+    out(JSON.stringify({ url, body: shown }, null, 2));
     return 0;
   }
   const key = loadKey({ env, home, warn: err });
@@ -290,7 +349,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, fe
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-ach-key': key },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(body.file_base64 ? 120000 : 30000),
     });
     text = await res.text();
   } catch (e) {

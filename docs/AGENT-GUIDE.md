@@ -60,6 +60,20 @@ node tools/ach.mjs send --bot research --chat <chat_id> --reply 345 --inbox 12 -
 - Tidak bisa menyelesaikan? `node tools/ach.mjs fail 12 --note "butuh akses GA4"` lalu jelaskan ke owner.
 - Sudah dibalas tanpa `--inbox`? `node tools/ach.mjs done 12 --note "dibalas manual"`.
 
+### 1b. Kirim gambar / dokumen (`send-photo`, `send-file`) — *aktif sejak ach-bridge v4.1.0*
+
+```bash
+node tools/ach.mjs send-photo --bot research --chat <chat_id> --reply 345 --file /tmp/grafik.png --caption "Grafik tren minggu ini 📈"
+node tools/ach.mjs send-file  --bot research --file /tmp/laporan.pdf --caption "Laporan riset" --inbox 12
+```
+
+- `send-photo`: PNG/JPG, maks 10MB. Lebih besar (≤20MB) atau ditolak Telegram (dimensi dll.) → otomatis dikirim sebagai dokumen (`"method":"sendDocument"`, alasan di `fallback`).
+- `send-file`: PDF/PNG/JPG sebagai dokumen (kualitas asli), maks 20MB.
+- Jenis dicek dari ekstensi **dan** isi file (magic bytes); file yang tidak cocok ditolak sebelum diunggah.
+- Opsi sama dengan `send`: `--chat` (harus chat yang dikenal bot; tanpa `--chat` → chat pribadi owner), `--reply`, `--inbox`, `--silent`.
+- `--caption` maks 1024 karakter dan kena filter angka sensitif (Rp/IDR, ≥9 digit, nomor HP), sama seperti log.
+- Hanya kirim file dari box yang memang untuk owner/tim; jangan kirim file berisi rahasia (key, `.env`, token). Kirim ke pihak luar tetap butuh izin owner.
+
 **English quick ref:** `claim <id>` → `report --status kerja --location desk --task "<title>" --task-status "Sedang kerja"` →
 `send --reply <msg> --text "ack"` → work (+ `typing`, progress `send`) → `report --task "<title>" --task-status Selesai` →
 `send --reply <msg> --inbox <id> --text "final"`.
@@ -155,6 +169,8 @@ juga berlaku untuk `--note`, `--task-note`, dan `log --text`.
 | `HTTP 401 unauthorized` | `bridge_key` salah/kosong. Minta owner/engineering cek `~/.config/achphoria/bridge_key`. |
 | `409 belum ada chat pribadi owner` | Owner belum pernah chat bot ini. Minta owner kirim `/start` ke bot tsb, atau pakai `--chat`. |
 | `403 chat … belum dikenal` | Bot belum pernah melihat chat itu. Cek `chats`; bot harus sudah ada di grup & menerima pesan. |
-| `400 … ditolak: mengandung …` | Hapus angka/nominal sensitif dari log/aktivitas/tugas. |
+| `400 … ditolak: mengandung …` | Hapus angka/nominal sensitif dari log/aktivitas/tugas/caption. |
+| `400 isi file tidak cocok …` / `413 file terlalu besar` | Pastikan file benar-benar PNG/JPG/PDF sesuai ekstensinya; foto ≤10MB, dokumen ≤20MB. |
+| `400 action tidak dikenal` saat `send-photo` | Bridge produksi belum v4.1.0 (belum di-deploy). |
 | `409 grup log belum terdaftar` (`log`) / `log_feed.skipped` | Owner belum kirim `/setlogs` (atau `/start` di grup "ACHPHORIA LOGS"). |
 | Bot tidak merespons di grup | Privasi grup bot masih aktif (atur di @BotFather → /setprivacy → Disable) atau tidak di-mention. |
