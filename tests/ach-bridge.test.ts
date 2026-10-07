@@ -1,0 +1,372 @@
+// Tes lokal Edge Function ach-bridge dengan Supabase (PostgREST) & Telegram tiruan.
+// Jalankan: deno test --allow-none tests/ach-bridge.test.ts   (tanpa jaringan, tanpa secret asli)
+import { FakeDb } from './fake-postgrest.ts';
+import { createHandler, parseCommand, sensitiveReason, splitText, safeEqual } from '../supabase/functions/ach-bridge/handler.ts';
+
+// deno-lint-ignore no-explicit-any
+type Row = Record<string, any>;
+function assert(c: unknown, msg = 'assertion failed'): asserts c { if (!c) throw new Error(msg); }
+function eq<T>(a: T, b: T, msg = '') { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg} expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`); }
+
+const TOKENS: Record<string, string> = {
+  chief: '1000001:AAchiefSECRETtokenXXXXXXXXXXXXXXXX',
+  research: '1000002:AAresearchSECRETtokenXXXXXXXXXXXXX',
+  ops: '1000003:AAopsSECRETtokenXXXXXXXXXXXXXXXXXX',
+  content: '1000004:AAcontentSECRETtokenXXXXXXXXXXXXXX',
+  engineering: '1000005:AAengineeringSECRETtokenXXXXXXXXXX',
+};
+const OWNER = 777;
+const HQ = -100500;
+
+interface Env { [k: string]: string }
+function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolean } = {}) {
+  const db = new FakeDb();
+  const tgCalls: { bot: string; method: string; body: Row }[] = [];
+  const wakeCalls: { url: string; headers: Headers; body: Row }[] = [];
+  const logs: string[] = [];
+  let msgId = 5000;
+  const env: Env = {
+    SUPABASE_URL: 'https://fake.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'eyJfake.service.role.key',
+    TG_WEBHOOK_SECRET: 'whsec-123456789', TG_CLAIM_CODE: 'CLAIM-abc123', BRIDGE_KEY: 'bridgekey-0123456789',
+    ...Object.fromEntries(Object.entries(TOKENS).map(([k, v]) => ['TG_TOKEN_' + k.toUpperCase(), v])),
+    ...extraEnv,
+  };
+  // deno-lint-ignore require-await
+  const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const headers = new Headers(init?.headers);
+    if (url.hostname === 'fake.supabase.co') {
+      assert(headers.get('apikey') === env.SUPABASE_SERVICE_ROLE_KEY, 'apikey header');
+      return db.handle(url, init?.method ?? 'GET', headers.get('prefer') ?? '', body);
+    }
+    if (url.hostname === 'api.telegram.org') {
+      const m = /^\/bot([^/]+)\/(\w+)$/.exec(url.pathname)!;
+      const bot = Object.entries(TOKENS).find(([, v]) => v === m[1])?.[0] ?? '?';
+      if (opts.tgThrow) throw new TypeError(`error sending request for url (${url.href}): connection refused`);
+      tgCalls.push({ bot, method: m[2], body });
+      return Response.json({ ok: true, result: m[2] === 'sendMessage' ? { message_id: ++msgId } : true });
+    }
+    if (url.hostname === 'wake.example') {
+      wakeCalls.push({ url: url.href, headers, body });
+      return new Response('ok', { status: opts.wakeStatus ?? 200 });
+    }
+    throw new Error('unexpected fetch ' + url.href);
+  };
+  const handler = createHandler({ env: (k) => env[k], fetch: fakeFetch as typeof fetch, log: (...a) => logs.push(a.map(String).join(' ')) });
+  // seed data kantor
+  db.tables.ach_agents.push(
+    { id: 'chief', name: 'Chief of Staff', status: 'kerja', location: 'meeting', activity: 'Stand-up', current_task: 'Rencana Q4', updated_at: new Date().toISOString(), sort_order: 1 },
+    { id: 'research', name: 'Research', status: 'istirahat', location: 'tea', activity: 'Seduh teh', current_task: null, updated_at: new Date(Date.now() - 5 * 3600e3).toISOString(), sort_order: 2 },
+  );
+  db.tables.ach_tasks.push(
+    { agent_id: 'research', title: 'Riset tren skincare', status: 'Sedang kerja', due_at: null },
+    { agent_id: 'ops', title: 'Rekap mingguan', status: 'Terjadwal', due_at: '2026-10-09T03:00:00Z' },
+  );
+  let upd = 1;
+  const tgPost = (bot: string, update: Row, secret = env.TG_WEBHOOK_SECRET) =>
+    handler(new Request(`http://localhost/ach-bridge/tg/${bot}`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': secret },
+      body: JSON.stringify({ update_id: update.update_id ?? upd++, ...update }),
+    }));
+  const api = (body: Row, key = env.BRIDGE_KEY) =>
+    handler(new Request('http://localhost/functions/v1/ach-bridge/api', { method: 'POST', headers: { 'x-ach-key': key, 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  const owner = { id: OWNER, is_bot: false, first_name: 'Eight', last_name: 'Bit', username: 'eightbit' };
+  const priv = (text: string, from: Row = owner, extra: Row = {}) => ({ message: { message_id: 10 + upd, from, chat: { id: from.id, type: 'private', first_name: from.first_name }, date: 1, text, ...extra } });
+  const grp = (text: string, from: Row = owner, extra: Row = {}) => ({ message: { message_id: 10 + upd, from, chat: { id: HQ, type: 'supergroup', title: 'ACHPHORIA HQ' }, date: 1, text, ...extra } });
+  const allowOwner = () => db.tables.ach_tg_allow.push({ from_id: OWNER, note: 'test', created_at: '2026-01-01T00:00:00Z' });
+  const sends = () => tgCalls.filter((c) => c.method === 'sendMessage');
+  return { db, env, handler, tgCalls, wakeCalls, logs, tgPost, api, priv, grp, owner, allowOwner, sends };
+}
+
+Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async () => {
+  eq(parseCommand('/status@Ach_Ops_Bot'), { name: 'status', target: 'ach_ops_bot', args: '' });
+  eq(parseCommand('/tugas research'), { name: 'tugas', target: null, args: 'research' });
+  eq(parseCommand('halo /status'), null);
+  const long = ('baris '.repeat(30) + '\n').repeat(60); // ~10.9k
+  const parts = splitText(long);
+  assert(parts.length === 3 && parts.every((p) => p.length <= 4000), 'split');
+  eq(parts.join('').replace(/\s/g, '').length, long.replace(/\s/g, '').length, 'tak ada teks hilang');
+  const emoji = '😀'.repeat(2500); // 5000 code units
+  assert(splitText(emoji).every((p) => !/[\ud800-\udbff]$/.test(p)), 'surrogate utuh');
+  assert(sensitiveReason('bayar Rp50.000') && sensitiveReason('rp 20rb') && sensitiveReason('IDR 5000'));
+  assert(sensitiveReason('hubungi 081234567890') && sensitiveReason('+62 812-3456-7890') && sensitiveReason('0812 3456 7890'));
+  assert(!sensitiveReason('mulai riset tren skincare 2026') && !sensitiveReason('rapat jam 10.30') && !sensitiveReason('cek rpm mesin') && !sensitiveReason('Sharpie'));
+  assert(await safeEqual('abc', 'abc') && !(await safeEqual('abc', 'abd')) && !(await safeEqual('', '')) && !(await safeEqual(null, 'x')));
+});
+
+Deno.test('health & routing', async () => {
+  const s = setup();
+  const r = await s.handler(new Request('http://localhost/ach-bridge/health'));
+  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v3.0.0' });
+  eq((await s.handler(new Request('http://localhost/ach-bridge?action=health'))).status, 200);
+  eq((await s.handler(new Request('http://localhost/ach-bridge/nope', { method: 'POST' }))).status, 404);
+});
+
+Deno.test('webhook: secret salah/kosong → 401, tanpa efek', async () => {
+  const s = setup();
+  eq((await s.tgPost('chief', s.priv('halo'), 'salah')).status, 401);
+  eq((await s.tgPost('chief', s.priv('halo'), '')).status, 401);
+  const noSecret = setup({ TG_WEBHOOK_SECRET: '' });
+  eq((await noSecret.tgPost('chief', noSecret.priv('halo'), 'apa saja')).status, 401);
+  eq(s.db.tables.ach_inbox.length + s.tgCalls.length, 0);
+  eq((await s.tgPost('bukanbot', s.priv('halo'))).status, 404);
+});
+
+Deno.test('tidak diizinkan: dicatat gagal, dibalas sopan SEKALI, tidak wake', async () => {
+  const s = setup({ WAKE_URL_RESEARCH: 'https://wake.example/research' });
+  const stranger = { id: 999, is_bot: false, first_name: 'Orang' };
+  eq((await s.tgPost('research', s.priv('halo bot', stranger))).status, 200);
+  await s.tgPost('research', s.priv('halo lagi', stranger));
+  eq(s.db.tables.ach_inbox.map((r) => [r.status, r.note]), [['gagal', 'tidak diizinkan'], ['gagal', 'tidak diizinkan']]);
+  eq(s.sends().length, 1, 'balasan sekali');
+  assert(/privat/.test(s.sends()[0].body.text));
+  eq(s.wakeCalls.length, 0);
+  eq(s.db.tables.ach_tg_chats.length, 1);
+});
+
+Deno.test('klaim owner: /start <kode> menambah allowlist, kode tidak tersimpan', async () => {
+  const s = setup();
+  await s.tgPost('content', s.priv('/start salah-kode'));
+  eq(s.db.tables.ach_tg_allow.length, 0);
+  await s.tgPost('content', s.priv('/start CLAIM-abc123'));
+  eq(s.db.tables.ach_tg_allow.map((r) => r.from_id), [OWNER]);
+  const dump = JSON.stringify(s.db.tables);
+  assert(!dump.includes('CLAIM-abc123') && !dump.includes('salah-kode'), 'kode tidak boleh tersimpan');
+  assert(/sudah masuk daftar owner/.test(s.sends().at(-1)!.body.text));
+  // di grup: ditolak + peringatan, tidak menambah
+  const g = setup();
+  await g.tgPost('chief', g.grp('/start@ach_chief_bot CLAIM-abc123'));
+  eq(g.db.tables.ach_tg_allow.length, 0);
+  assert(/chat pribadi/.test(g.sends()[0].body.text));
+});
+
+Deno.test('pesan owner → inbox baru + typing + wake (bearer default)', async () => {
+  const s = setup({ WAKE_URL_RESEARCH: 'https://wake.example/research', WAKE_KEY_RESEARCH: 'wakekey-research-1' });
+  s.allowOwner();
+  await s.tgPost('research', s.priv('tolong riset tren skincare'));
+  const row = s.db.tables.ach_inbox[0];
+  eq([row.status, row.text, row.from_name, row.chat_type], ['baru', 'tolong riset tren skincare', 'Eight Bit', 'private']);
+  assert(s.tgCalls.some((c) => c.method === 'sendChatAction' && c.body.action === 'typing'));
+  eq(s.wakeCalls.length, 1);
+  const w = s.wakeCalls[0];
+  eq(w.headers.get('authorization'), 'Bearer wakekey-research-1');
+  eq([w.body.source, w.body.bot, w.body.inbox_id, w.body.chat_id, w.body.text], ['telegram', 'research', row.id, OWNER, 'tolong riset tren skincare']);
+  assert(/wake ok/.test(row.note));
+  eq(s.sends().length, 0, 'tidak ada notifikasi gagal');
+});
+
+Deno.test('wake: gaya query & header mentah, per-bot override, gagal tidak memutus', async () => {
+  const q = setup({ WAKE_URL_OPS: 'https://wake.example/ops?x=1', WAKE_KEY_OPS: 'k-ops-123456', WAKE_KEY_STYLE: 'query', WAKE_KEY_PARAM: 'sender_key' });
+  q.allowOwner();
+  await q.tgPost('ops', q.priv('cek data'));
+  eq(new URL(q.wakeCalls[0].url).searchParams.get('sender_key'), 'k-ops-123456');
+  eq(q.wakeCalls[0].headers.get('authorization'), null);
+  const h = setup({ WAKE_URL_OPS: 'https://wake.example/ops', WAKE_KEY_OPS: 'k-ops-123456', WAKE_KEY_HEADER: 'X-Sender-Key', WAKE_KEY_STYLE: 'raw' });
+  h.allowOwner();
+  await h.tgPost('ops', h.priv('cek data'));
+  eq(h.wakeCalls[0].headers.get('x-sender-key'), 'k-ops-123456');
+  const f = setup({ WAKE_URL_OPS: 'https://wake.example/ops', WAKE_KEY_OPS: 'k-ops-123456' }, { wakeStatus: 403 });
+  f.allowOwner();
+  eq((await f.tgPost('ops', f.priv('cek data'))).status, 200);
+  const row = f.db.tables.ach_inbox[0];
+  eq(row.status, 'baru');
+  assert(/wake gagal: HTTP 403/.test(row.note) && !row.note.includes('k-ops-123456'));
+  assert(/belum bisa dibangunkan/.test(f.sends()[0].body.text));
+});
+
+Deno.test('wake belum dikonfigurasi: tetap tersimpan di inbox', async () => {
+  const s = setup();
+  s.allowOwner();
+  eq((await s.tgPost('engineering', s.priv('deploy dong'))).status, 200);
+  const row = s.db.tables.ach_inbox[0];
+  eq(row.status, 'baru');
+  assert(/WAKE_URL_ENGINEERING kosong/.test(row.note));
+  eq(s.wakeCalls.length, 0);
+});
+
+Deno.test('perintah cepat /status /tugas /help', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief' });
+  s.allowOwner();
+  await s.tgPost('chief', s.priv('/status'));
+  const st = s.sends()[0].body.text as string;
+  assert(st.includes('Chief of Staff') && st.includes('Rapat di Kotatsu') && st.includes('Stasiun Teh') && st.includes('data basi'), st);
+  await s.tgPost('chief', s.priv('/tugas research'));
+  const tg = s.sends()[1].body.text as string;
+  assert(tg.includes('Riset tren skincare') && !tg.includes('Rekap mingguan'), tg);
+  await s.tgPost('chief', s.priv('/tugas'));
+  assert((s.sends()[2].body.text as string).includes('Rekap mingguan'));
+  await s.tgPost('chief', s.priv('/help'));
+  assert((s.sends()[3].body.text as string).includes('/status'));
+  eq(s.wakeCalls.length, 0, 'perintah cepat tidak membangunkan asisten');
+  assert(s.db.tables.ach_inbox.every((r) => r.status === 'selesai'));
+});
+
+Deno.test('grup HQ: aturan mention/reply/command & chief sebagai penerima default', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('research', s.grp('halo semua'));
+  eq(s.db.tables.ach_inbox.length, 0, 'research abaikan pesan tanpa mention');
+  await s.tgPost('chief', s.grp('halo semua'));
+  eq(s.db.tables.ach_inbox.length, 1, 'chief menangani pesan umum owner');
+  const mention = s.grp('@ach_research_bot cek tren', s.owner, { entities: [{ type: 'mention', offset: 0, length: 17 }] });
+  await s.tgPost('research', mention);
+  await s.tgPost('chief', mention);
+  eq(s.db.tables.ach_inbox.map((r) => r.bot), ['chief', 'research'], 'chief tidak ikut bila bot lain di-mention');
+  await s.tgPost('research', s.grp('lanjut ya', s.owner, { reply_to_message: { message_id: 1, from: { id: 1000002, is_bot: true, username: 'ach_research_bot' } } }));
+  eq(s.db.tables.ach_inbox.at(-1)!.bot, 'research', 'reply ke pesan bot');
+  const before = s.db.tables.ach_inbox.length;
+  await s.tgPost('chief', s.grp('/status@ach_ops_bot'));
+  eq(s.db.tables.ach_inbox.length, before, 'chief abaikan /cmd@bot_lain');
+  await s.tgPost('ops', s.grp('/status@ach_ops_bot'));
+  eq(s.db.tables.ach_inbox.at(-1)!.note, 'perintah cepat /status');
+  // non-owner di grup: chief tidak menganggapnya ditujukan (tidak ada balasan spam)
+  const n = s.sends().length;
+  await s.tgPost('chief', s.grp('halo', { id: 4242, is_bot: false, first_name: 'Tamu' }));
+  eq(s.sends().length, n);
+});
+
+Deno.test('pesan dari bot: abaikan kecuali mention; saudara = diizinkan; bot asing = gagal tanpa balasan', async () => {
+  const s = setup({ WAKE_URL_OPS: 'https://wake.example/ops' });
+  const researchBot = { id: 1000002, is_bot: true, first_name: 'Research', username: 'ach_research_bot' };
+  await s.tgPost('ops', s.grp('update data dong', researchBot));
+  await s.tgPost('chief', s.grp('update data dong', researchBot));
+  eq(s.db.tables.ach_inbox.length, 0, 'tanpa mention diabaikan (cegah loop)');
+  await s.tgPost('ops', s.grp('@ach_ops_bot minta data penjualan', researchBot));
+  eq(s.db.tables.ach_inbox[0].status, 'baru');
+  eq(s.wakeCalls.length, 1);
+  const alien = { id: 31337, is_bot: true, first_name: 'Spam', username: 'spam_bot' };
+  await s.tgPost('ops', s.grp('@ach_ops_bot halo', alien));
+  eq(s.db.tables.ach_inbox[1].status, 'gagal');
+  eq(s.sends().length, 0);
+  await s.tgPost('ops', s.grp('@ach_ops_bot echo', { id: 1000003, is_bot: true, username: 'ach_ops_bot' }));
+  eq(s.db.tables.ach_inbox.length, 2, 'pesan sendiri diabaikan');
+});
+
+Deno.test('update ganda (retry Telegram) hanya diproses sekali; my_chat_member mencatat chat', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief' });
+  s.allowOwner();
+  const u = { update_id: 4242, ...s.priv('halo') };
+  await s.tgPost('chief', u);
+  await s.tgPost('chief', u);
+  eq(s.db.tables.ach_inbox.length, 1);
+  eq(s.wakeCalls.length, 1);
+  await s.tgPost('content', { my_chat_member: { chat: { id: HQ, type: 'supergroup', title: 'ACHPHORIA HQ' }, from: s.owner, new_chat_member: { status: 'member' } } });
+  assert(s.db.tables.ach_tg_chats.some((c) => c.bot === 'content' && c.chat_id === HQ && c.title === 'ACHPHORIA HQ'));
+});
+
+Deno.test('callback_query & foto ber-caption', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('content', { callback_query: { id: 'cb1', from: s.owner, data: 'setuju_publish', message: { message_id: 3, chat: { id: OWNER, type: 'private' } } } });
+  assert(s.tgCalls.some((c) => c.method === 'answerCallbackQuery'));
+  eq(s.db.tables.ach_inbox[0].text, 'setuju_publish');
+  await s.tgPost('content', { message: { message_id: 9, from: s.owner, chat: { id: OWNER, type: 'private' }, photo: [{}], caption: 'pakai ini buat IG' } });
+  eq(s.db.tables.ach_inbox[1].text, '[foto] pakai ini buat IG');
+});
+
+Deno.test('waitUntil: respons 200 dulu, kerja di latar', async () => {
+  const s = setup();
+  s.allowOwner();
+  const jobs: Promise<unknown>[] = [];
+  let dbCalls = 0;
+  const slowFetch = async (i: string | URL | Request, init?: RequestInit) => {
+    await new Promise((r) => setTimeout(r, 20));
+    const url = new URL(String(i));
+    if (url.hostname !== 'fake.supabase.co') return Response.json({ ok: true, result: { message_id: 1 } });
+    dbCalls++;
+    return s.db.handle(url, init?.method ?? 'GET', new Headers(init?.headers).get('prefer') ?? '', init?.body ? JSON.parse(String(init.body)) : undefined);
+  };
+  const h = createHandler({ env: (k) => s.env[k], fetch: slowFetch as typeof fetch, waitUntil: (p) => jobs.push(p), log: () => {} });
+  const res = await h(new Request('http://x/ach-bridge/tg/chief', { method: 'POST', headers: { 'x-telegram-bot-api-secret-token': s.env.TG_WEBHOOK_SECRET }, body: JSON.stringify({ update_id: 1, ...s.priv('halo') }) }));
+  eq(res.status, 200);
+  eq([jobs.length, dbCalls, s.db.tables.ach_inbox.length], [1, 0, 0], 'belum ada kerja saat respons dikirim');
+  await Promise.all(jobs);
+  eq(s.db.tables.ach_inbox.length, 1);
+});
+
+Deno.test('API: auth, send (owner default, split, outbox, inbox selesai), chat tak dikenal', async () => {
+  const s = setup();
+  eq((await s.api({ action: 'ping' }, 'salah')).status, 401);
+  eq((await s.api({ action: 'ping' }, '')).status, 401);
+  const ping = await (await s.api({ action: 'ping' })).json();
+  eq(ping.configured.research, { token: true, wake_url: false, wake_key: false });
+  // belum ada owner → 409
+  eq((await s.api({ action: 'send', bot: 'research', text: 'hai' })).status, 409);
+  s.allowOwner();
+  await s.tgPost('research', s.priv('tolong riset'));
+  const inboxId = s.db.tables.ach_inbox[0].id;
+  const n0 = s.sends().length; // (notifikasi 'belum bisa dibangunkan' karena WAKE_URL kosong)
+  const text = ('x'.repeat(99) + '\n').repeat(50); // 5000 karakter → 2 bagian
+  const r = await (await s.api({ action: 'send', bot: 'research', text, reply_to_message_id: 42, inbox_id: inboxId })).json();
+  eq([r.ok, r.chat_id, r.parts, r.inbox_done], [true, OWNER, 2, true]);
+  const sm = s.sends().slice(n0);
+  eq(sm[0].body.reply_parameters.message_id, 42);
+  eq(sm[1].body.reply_parameters, undefined);
+  eq(s.db.tables.ach_outbox.length, n0 + 2);
+  assert(s.db.tables.ach_outbox.every((o) => o.ok));
+  eq(s.db.tables.ach_inbox[0].status, 'selesai');
+  eq((await s.api({ action: 'send', bot: 'research', chat_id: 123, text: 'hai' })).status, 403);
+  eq((await s.api({ action: 'send', bot: 'research', text: 'hai', parse_mode: 'Markdown' })).status, 400);
+  eq((await s.api({ action: 'send', bot: 'hacker', text: 'hai' })).status, 400);
+  // grup HQ dikenal setelah ada update dari grup
+  await s.tgPost('research', s.grp('@ach_research_bot hai', s.owner));
+  const g = await (await s.api({ action: 'send', bot: 'research', chat_id: HQ, text: '<b>progres</b> 50%', parse_mode: 'HTML' })).json();
+  eq(g.chat_id, HQ);
+  eq(s.sends().at(-1)!.body.parse_mode, 'HTML');
+  const chats = await (await s.api({ action: 'chats', bot: 'research' })).json();
+  eq(chats.rows.map((c: Row) => c.chat_id).sort(), [OWNER, HQ].sort());
+});
+
+Deno.test('API: inbox / claim / done / fail', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('ops', s.priv('satu'));
+  await s.tgPost('ops', s.priv('dua'));
+  const list = await (await s.api({ action: 'inbox', bot: 'ops' })).json();
+  eq(list.rows.map((r: Row) => r.text), ['satu', 'dua']);
+  assert(!('update' in list.rows[0]) || list.rows[0].update !== undefined);
+  const c1 = await (await s.api({ action: 'claim', inbox_id: list.rows[0].id, bot: 'ops' })).json();
+  eq([c1.ok, c1.claimed, s.db.tables.ach_inbox[0].status], [true, true, 'diproses']);
+  const c2 = await (await s.api({ action: 'claim', inbox_id: list.rows[0].id })).json();
+  eq([c2.ok, c2.claimed], [false, false]);
+  eq((await s.api({ action: 'claim', inbox_id: 999 })).status, 404);
+  await s.api({ action: 'done', inbox_id: list.rows[0].id, note: 'beres' });
+  await s.api({ action: 'fail', inbox_id: list.rows[1].id, note: 'butuh akses' });
+  eq(s.db.tables.ach_inbox.map((r) => [r.status, r.note]), [['selesai', 'beres'], ['gagal', 'butuh akses']]);
+  eq((await s.api({ action: 'inbox', bot: 'ops', status: 'aneh' })).status, 400);
+  const all = await (await s.api({ action: 'inbox', bot: 'ops', status: 'semua' })).json();
+  eq(all.count, 2);
+});
+
+Deno.test('API: report → RPC ach_report_activity + validasi', async () => {
+  const s = setup();
+  const ok = await (await s.api({ action: 'report', bot: 'research', status: 'kerja', location: 'desk', activity: 'riset tren', task: 'Riset tren skincare', task_status: 'Sedang kerja', log: 'mulai riset' })).json();
+  eq(ok.ok, true);
+  eq(s.db.rpc[0], { p_agent_id: 'research', p_status: 'kerja', p_location: 'desk', p_activity: 'riset tren', p_task: 'Riset tren skincare', p_task_status: 'Sedang kerja', p_log: 'mulai riset' });
+  await s.api({ action: 'report', bot: 'ops', location: '' });
+  eq(s.db.rpc[1].p_location, '', "'' = jadwal otomatis diteruskan");
+  eq(s.db.rpc[1].p_status, null);
+  for (const bad of [
+    { bot: 'research', location: 'kantin' }, { bot: 'research', status: 'sibuk' }, { bot: 'research', task: 'x', task_status: 'selesai' },
+    { bot: 'research', log: 'bayar Rp 50.000' }, { bot: 'research', log: 'telp 081234567890' }, { bot: 'research', activity: 'transfer 1234567890' },
+    { bot: 'marketing', status: 'kerja' },
+  ]) {
+    const r = await s.api({ action: 'report', ...bad });
+    eq(r.status, 400, JSON.stringify(bad));
+  }
+  eq(s.db.rpc.length, 2);
+});
+
+Deno.test('rahasia tidak pernah bocor ke log/respons/DB', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief', WAKE_KEY_CHIEF: 'super-wake-key-zzz' }, { tgThrow: true });
+  s.allowOwner();
+  await s.tgPost('chief', s.priv('halo'));
+  const res = await s.api({ action: 'send', bot: 'chief', text: 'hai' });
+  const body = await res.text();
+  const all = [body, ...s.logs, JSON.stringify(s.db.tables)].join('\n');
+  for (const v of [...Object.values(TOKENS), s.env.BRIDGE_KEY, s.env.TG_WEBHOOK_SECRET, s.env.TG_CLAIM_CODE, 'super-wake-key-zzz', s.env.SUPABASE_SERVICE_ROLE_KEY]) {
+    assert(!all.includes(v), 'bocor: ' + v.slice(0, 8));
+  }
+  assert(body.includes('bot[token]') || body.includes('[rahasia]'), body);
+});
