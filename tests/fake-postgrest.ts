@@ -3,14 +3,15 @@
 type Row = Record<string, any>;
 /* ---------------- fake PostgREST ---------------- */
 export class FakeDb {
-  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [] };
+  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [], ach_tg_logmsg: [] };
   seq: Record<string, number> = { ach_inbox: 0, ach_outbox: 0 };
   rpc: Row[] = [];
-  keys: Record<string, string[]> = { ach_inbox: ['bot', 'update_id'], ach_tg_allow: ['from_id'], ach_tg_chats: ['bot', 'chat_id'] };
+  keys: Record<string, string[]> = { ach_inbox: ['bot', 'update_id'], ach_tg_allow: ['from_id'], ach_tg_chats: ['bot', 'chat_id'], ach_tg_logmsg: ['task_id', 'chat_id'] };
   handle(url: URL, method: string, prefer: string, body: unknown): Response {
     const path = url.pathname.replace(/^\/rest\/v1\//, '');
-    if (path.startsWith('rpc/')) { this.rpc.push(body as Row); return Response.json({ ok: true, agent_id: (body as Row).p_agent_id }); }
+    if (path.startsWith('rpc/')) return this.reportActivity(body as Row);
     const t = this.tables[path];
+    if (path === 'ach_tasks') for (const r of t) r.id ??= crypto.randomUUID();
     if (!t) return Response.json({ message: 'relation does not exist' }, { status: 404 });
     const filters: [string, string][] = [];
     let order: string | null = null, limit = Infinity, onConflict: string[] | null = null;
@@ -23,7 +24,8 @@ export class FakeDb {
     }
     const match = (r: Row) => filters.every(([k, v]) => {
       const val = r[k] === null || r[k] === undefined ? 'null' : String(r[k]);
-      if (v.startsWith('eq.')) return val === v.slice(3);
+      if (v.startsWith('eq.')) return val === decodeURIComponent(v.slice(3));
+      if (v === 'is.null') return val === 'null';
       if (v.startsWith('in.(')) return v.slice(4, -1).split(',').map((s) => s.replace(/^"|"$/g, '')).includes(val);
       throw new Error('filter tak didukung: ' + v);
     });
@@ -62,6 +64,26 @@ export class FakeDb {
       return rep ? Response.json(rows) : new Response(null, { status: 204 });
     }
     return new Response('?', { status: 405 });
+  }
+  /** Tiruan ringkas ach_report_activity: catat argumen, perbarui/buat tugas, kembalikan task_id. */
+  reportActivity(b: Row): Response {
+    this.rpc.push(b);
+    let taskId: string | null = null;
+    const task = b.p_task ? String(b.p_task).trim() : '';
+    if (task) {
+      const st = b.p_task_status || 'Sedang kerja';
+      const mine = this.tables.ach_tasks.filter((t) => t.agent_id === b.p_agent_id && String(t.title).toLowerCase() === task.toLowerCase())
+        .sort((x, y) => Number(x.status === 'Selesai') - Number(y.status === 'Selesai'));
+      if (mine.length) { mine[0].id ??= crypto.randomUUID(); mine[0].status = st; mine[0].updated_at = new Date().toISOString(); taskId = mine[0].id; }
+      else { taskId = crypto.randomUUID(); this.tables.ach_tasks.push({ id: taskId, agent_id: b.p_agent_id, title: task, status: st, updated_at: new Date().toISOString() }); }
+    }
+    const a = this.tables.ach_agents.find((x) => x.id === b.p_agent_id);
+    if (a) {
+      if (b.p_status) a.status = b.p_status;
+      if (b.p_location !== null && b.p_location !== undefined) a.location = b.p_location === '' ? null : b.p_location;
+      if (b.p_activity !== null && b.p_activity !== undefined) a.activity = b.p_activity;
+    }
+    return Response.json({ ok: true, agent_id: b.p_agent_id, task_id: taskId, log_id: null });
   }
 }
 

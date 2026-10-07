@@ -17,6 +17,7 @@ const TOKENS: Record<string, string> = {
 };
 const OWNER = 777;
 const HQ = -100500;
+const LOGS = -100900;
 
 interface Env { [k: string]: string }
 function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolean } = {}) {
@@ -74,9 +75,10 @@ function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolea
   const owner = { id: OWNER, is_bot: false, first_name: 'Eight', last_name: 'Bit', username: 'eightbit' };
   const priv = (text: string, from: Row = owner, extra: Row = {}) => ({ message: { message_id: 10 + upd, from, chat: { id: from.id, type: 'private', first_name: from.first_name }, date: 1, text, ...extra } });
   const grp = (text: string, from: Row = owner, extra: Row = {}) => ({ message: { message_id: 10 + upd, from, chat: { id: HQ, type: 'supergroup', title: 'ACHPHORIA HQ' }, date: 1, text, ...extra } });
+  const lg = (text: string, from: Row = owner, extra: Row = {}) => ({ message: { message_id: 10 + upd, from, chat: { id: LOGS, type: 'supergroup', title: 'ACHPHORIA LOGS' }, date: 1, text, ...extra } });
   const allowOwner = () => db.tables.ach_tg_allow.push({ from_id: OWNER, note: 'test', created_at: '2026-01-01T00:00:00Z' });
   const sends = () => tgCalls.filter((c) => c.method === 'sendMessage');
-  return { db, env, handler, tgCalls, wakeCalls, logs, tgPost, api, priv, grp, owner, allowOwner, sends };
+  return { db, env, handler, tgCalls, wakeCalls, logs, tgPost, api, priv, grp, lg, owner, allowOwner, sends };
 }
 
 Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async () => {
@@ -98,7 +100,7 @@ Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async 
 Deno.test('health & routing', async () => {
   const s = setup();
   const r = await s.handler(new Request('http://localhost/ach-bridge/health'));
-  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v3.0.0' });
+  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v4.0.0' });
   eq((await s.handler(new Request('http://localhost/ach-bridge?action=health'))).status, 200);
   eq((await s.handler(new Request('http://localhost/ach-bridge/nope', { method: 'POST' }))).status, 404);
 });
@@ -369,4 +371,192 @@ Deno.test('rahasia tidak pernah bocor ke log/respons/DB', async () => {
     assert(!all.includes(v), 'bocor: ' + v.slice(0, 8));
   }
   assert(body.includes('bot[token]') || body.includes('[rahasia]'), body);
+});
+
+/* ------------------------------------------------------------------ */
+/* v4 — grup ACHPHORIA LOGS                                             */
+/* ------------------------------------------------------------------ */
+async function registerLogs(s: ReturnType<typeof setup>) {
+  s.allowOwner();
+  const u = s.lg('/start');
+  for (const b of ['chief', 'research', 'ops', 'content', 'engineering']) await s.tgPost(b, { update_id: 9000, ...u });
+}
+
+Deno.test('LOGS: /start owner di grup "… LOGS" → terdaftar, konfirmasi sekali oleh Chief', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief' });
+  await registerLogs(s);
+  const logsRows = s.db.tables.ach_tg_chats.filter((c) => c.chat_id === LOGS);
+  eq(logsRows.length, 5);
+  assert(logsRows.find((c) => c.bot === 'chief')!.role === 'logs', 'chat LOGS ber-role logs');
+  eq(new Set(s.db.tables.ach_tg_chats.filter((c) => c.role === 'logs').map((c) => c.chat_id)).size, 1);
+  eq(s.sends().map((c) => [c.bot, c.body.chat_id]), [['chief', LOGS]]);
+  assert(/Grup log ACHPHORIA aktif/.test(s.sends()[0].body.text));
+  eq(s.db.tables.ach_inbox.map((r) => [r.bot, r.note]), [['chief', 'grup log didaftarkan']]);
+  eq(s.wakeCalls.length, 0);
+  // retry Telegram → tidak dobel
+  await s.tgPost('chief', { update_id: 9000, ...s.lg('/start') });
+  eq(s.sends().length, 1);
+  // ping melaporkan grup log
+  eq((await (await s.api({ action: 'ping' })).json()).logs_group, true);
+});
+
+Deno.test('LOGS: feed saja — pesan biasa/mention/perintah lain diabaikan, perintah cepat tetap jalan', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief', WAKE_URL_RESEARCH: 'https://wake.example/research' });
+  await registerLogs(s);
+  const n = s.sends().length, inb = s.db.tables.ach_inbox.length;
+  await s.tgPost('chief', s.lg('halo semua'));
+  await s.tgPost('research', s.lg('@ach_research_bot cek dong', s.owner, { entities: [{ type: 'mention', offset: 0, length: 17 }] }));
+  await s.tgPost('chief', s.lg('/kerjakan sesuatu'));
+  await s.tgPost('chief', s.lg('', s.owner, { photo: [{}] }));
+  eq([s.sends().length, s.db.tables.ach_inbox.length, s.wakeCalls.length], [n, inb, 0], 'tidak ada balasan/inbox/wake');
+  await s.tgPost('chief', s.lg('/status'));
+  assert(/Status kantor/.test(s.sends().at(-1)!.body.text));
+  // judul mengandung LOGS tapi belum terdaftar pun tetap diam
+  const t = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief' });
+  t.allowOwner();
+  await t.tgPost('chief', t.lg('halo'));
+  eq([t.sends().length, t.db.tables.ach_inbox.length, t.wakeCalls.length], [0, 0, 0]);
+  // non-owner /start di LOGS → tidak mendaftarkan, tanpa balasan
+  const u = setup();
+  await u.tgPost('chief', u.lg('/start', { id: 4242, is_bot: false, first_name: 'Tamu' }));
+  eq([u.sends().length, u.db.tables.ach_tg_chats.filter((c) => c.role === 'logs').length], [0, 0]);
+});
+
+Deno.test('LOGS: /setlogs di grup lain memindahkan grup log; /unsetlogs menonaktifkan; HQ tetap normal', async () => {
+  const s = setup();
+  await registerLogs(s);
+  await s.tgPost('chief', s.grp('/setlogs'));
+  eq(s.db.tables.ach_tg_chats.filter((c) => c.role === 'logs').map((c) => c.chat_id), [HQ]);
+  assert(/aktif/.test(s.sends().at(-1)!.body.text));
+  await s.tgPost('chief', s.grp('/unsetlogs'));
+  eq(s.db.tables.ach_tg_chats.filter((c) => c.role === 'logs').length, 0);
+  assert(/dinonaktifkan/.test(s.sends().at(-1)!.body.text));
+  await s.tgPost('chief', s.grp('halo semua'));
+  eq(s.db.tables.ach_inbox.at(-1)!.text, 'halo semua', 'HQ kembali menerima pesan owner');
+});
+
+Deno.test('LOGS: migrasi grup → supergroup membawa role; pesan layanan tidak masuk inbox', async () => {
+  const s = setup({ WAKE_URL_CHIEF: 'https://wake.example/chief' });
+  s.allowOwner();
+  const OLD = -900;
+  await s.tgPost('chief', { message: { message_id: 1, from: s.owner, chat: { id: OLD, type: 'group', title: 'ACHPHORIA LOGS' }, date: 1, text: '/setlogs' } });
+  eq(s.db.tables.ach_tg_chats.find((c) => c.chat_id === OLD)!.role, 'logs');
+  await s.tgPost('chief', { message: { message_id: 2, from: s.owner, chat: { id: OLD, type: 'group', title: 'ACHPHORIA LOGS' }, date: 1, migrate_to_chat_id: LOGS } });
+  eq(s.db.tables.ach_tg_chats.filter((c) => c.role === 'logs').map((c) => c.chat_id), [LOGS]);
+  const inb = s.db.tables.ach_inbox.length;
+  await s.tgPost('chief', s.grp('', s.owner, { new_chat_members: [{ id: 5, is_bot: false, first_name: 'X' }] }));
+  await s.tgPost('chief', s.grp('', s.owner, { pinned_message: { message_id: 1 } }));
+  eq([s.db.tables.ach_inbox.length, s.wakeCalls.length], [inb, 0]);
+});
+
+Deno.test('LOGS feed: tugas baru → induk Chief; mulai/selesai/gagal/approval → balasan berutas bot divisi', async () => {
+  const s = setup();
+  await registerLogs(s);
+  const n0 = s.sends().length;
+  const r1 = await (await s.api({ action: 'task', bot: 'research', event: 'new', title: 'Tes grup log' })).json();
+  eq([r1.ok, r1.log_feed.ok, r1.log_feed.posted], [true, true, 1]);
+  const task = s.db.tables.ach_tasks.find((t) => t.title === 'Tes grup log')!;
+  eq(task.status, 'Terjadwal');
+  const root = s.sends()[n0];
+  eq([root.bot, root.body.chat_id], ['chief', LOGS]);
+  eq(root.body.text, `📋 Tugas #${String(task.id).slice(0, 8)}: Tes grup log\nDivisi: Research\nStatus: Terjadwal`);
+  const rootId = r1.log_feed.root_message_id;
+  eq(s.db.tables.ach_tg_logmsg.map((r) => [r.task_id, r.chat_id, r.message_id]), [[task.id, LOGS, rootId]]);
+
+  const r2 = await (await s.api({ action: 'task', bot: 'research', event: 'start', title: 'tes grup log', note: 'cek 3 sumber' })).json();
+  eq(r2.log_feed.posted, 1);
+  let m = s.sends().at(-1)!;
+  eq([m.bot, m.body.text, m.body.reply_parameters.message_id], ['research', '🔄 Research: mulai kerja — cek 3 sumber', rootId]);
+  eq(task.status, 'Sedang kerja');
+  // report dengan status tugas sama → tidak spam
+  const n1 = s.sends().length;
+  const r3 = await (await s.api({ action: 'report', bot: 'research', activity: 'lanjut', task: 'Tes grup log', task_status: 'Sedang kerja' })).json();
+  eq([r3.log_feed.posted, s.sends().length], [0, n1]);
+  // nunggu approval & gagal tidak mengubah status tugas di website
+  await s.api({ action: 'task', bot: 'research', event: 'approval', task_id: String(task.id).slice(0, 8), note: 'draf siap' });
+  m = s.sends().at(-1)!;
+  eq([m.body.text, m.body.reply_parameters.message_id], ['⏳ Research: nunggu approval owner — draf siap', rootId]);
+  await s.api({ action: 'report', bot: 'research', task: 'Tes grup log', task_event: 'gagal', task_note: 'sumber tidak bisa diakses' });
+  eq(s.sends().at(-1)!.body.text, '❌ Research: gagal — sumber tidak bisa diakses');
+  eq(task.status, 'Sedang kerja');
+  // selesai lewat report biasa (alur lama di AGENT-GUIDE) → ✅ otomatis, catatan dari --log
+  await s.api({ action: 'report', bot: 'research', task: 'Tes grup log', task_status: 'Selesai', activity: 'merapikan catatan', log: 'selesai tes grup log ✔' });
+  m = s.sends().at(-1)!;
+  eq([m.bot, m.body.text, m.body.reply_parameters.message_id], ['research', '✅ Research: selesai — selesai tes grup log ✔', rootId]);
+  eq(task.status, 'Selesai');
+  eq(s.db.tables.ach_tg_logmsg.length, 1, 'satu induk per tugas');
+  assert(s.db.tables.ach_outbox.filter((o) => o.chat_id === LOGS).length >= 6, 'feed tercatat di outbox');
+});
+
+Deno.test('LOGS feed: report tugas baru langsung "Sedang kerja" → induk + balasan; tugas lama tanpa induk dibuatkan induk', async () => {
+  const s = setup();
+  await registerLogs(s);
+  const n0 = s.sends().length;
+  await s.api({ action: 'report', bot: 'ops', status: 'kerja', task: 'Rekap harian', task_status: 'Sedang kerja', activity: 'tarik data' });
+  const sm = s.sends().slice(n0);
+  eq(sm.map((c) => c.bot), ['chief', 'ops']);
+  assert(/Status: Sedang kerja/.test(sm[0].body.text));
+  eq(sm[1].body.text, '🔄 Ops & Data: mulai kerja — tarik data');
+  // tugas lama (sudah ada sebelum v4) → induk dibuat saat event pertama
+  const n1 = s.sends().length;
+  await s.api({ action: 'task', bot: 'research', event: 'done', title: 'Riset tren skincare', note: 'ringkasan terkirim' });
+  const sm2 = s.sends().slice(n1);
+  eq(sm2.map((c) => c.bot), ['chief', 'research']);
+  assert(/Riset tren skincare/.test(sm2[0].body.text));
+  eq(sm2[1].body.text, '✅ Research: selesai — ringkasan terkirim');
+  // task + inbox: start → diproses, done → selesai
+  await s.tgPost('research', s.priv('tolong riset'));
+  const ib = s.db.tables.ach_inbox.at(-1)!;
+  const r = await (await s.api({ action: 'task', bot: 'research', event: 'start', title: 'Riset baru', inbox_id: ib.id })).json();
+  eq([r.inbox.status, ib.status], ['diproses', 'diproses']);
+  await s.api({ action: 'task', bot: 'research', event: 'done', title: 'Riset baru', inbox_id: ib.id, note: 'beres' });
+  eq([ib.status, ib.note], ['selesai', 'beres']);
+  // validasi
+  for (const bad of [
+    { action: 'task', bot: 'research', event: 'hapus', title: 'x' }, { action: 'task', bot: 'research', event: 'start' },
+    { action: 'task', bot: 'research', event: 'start', title: 'x', note: 'bayar Rp 50.000' },
+    { action: 'task', bot: 'research', event: 'start', title: 'x', agent: 'ops' },
+    { action: 'report', bot: 'research', task_event: 'gagal' }, { action: 'report', bot: 'research', task: 'x', task_event: 'aneh' },
+  ]) eq((await s.api(bad)).status, 400, JSON.stringify(bad));
+  eq((await s.api({ action: 'task', bot: 'research', event: 'fail', title: 'Tidak ada' })).status, 404);
+  // Chief menugaskan divisi lain
+  const n2 = s.sends().length;
+  await s.api({ action: 'task', bot: 'chief', agent: 'content', event: 'new', title: 'Kalender konten' });
+  assert(s.db.tables.ach_tasks.some((t) => t.agent_id === 'content' && t.title === 'Kalender konten' && t.status === 'Terjadwal'));
+  assert(/Divisi: Content & Marketing/.test(s.sends()[n2].body.text));
+});
+
+Deno.test('LOGS feed: gagal kirim Telegram / grup belum terdaftar tidak memutus respons report', async () => {
+  const none = setup();
+  const r0 = await none.api({ action: 'report', bot: 'research', task: 'Tugas A', task_status: 'Terjadwal' });
+  const j0 = await r0.json();
+  eq([r0.status, j0.ok, j0.log_feed.skipped], [200, true, 'grup log belum terdaftar']);
+  const s = setup({}, { tgThrow: true });
+  s.allowOwner();
+  s.db.tables.ach_tg_chats.push({ bot: 'chief', chat_id: LOGS, chat_type: 'supergroup', title: 'ACHPHORIA LOGS', role: 'logs', last_seen: new Date().toISOString() });
+  const r = await s.api({ action: 'task', bot: 'research', event: 'start', title: 'Tugas B' });
+  const j = await r.json();
+  eq([r.status, j.ok, j.log_feed.ok], [200, true, false]);
+  assert(s.db.tables.ach_tasks.some((t) => t.title === 'Tugas B' && t.status === 'Sedang kerja'), 'tugas tetap tercatat');
+  assert(s.logs.some((l) => /feed grup log/.test(l)));
+  assert(!JSON.stringify(j).includes(TOKENS.chief) && !s.logs.join('\n').includes(TOKENS.research));
+});
+
+Deno.test('LOGS: action log — posting bebas sebagai bot sendiri, berutas di bawah tugas, filter angka', async () => {
+  const s = setup();
+  s.allowOwner();
+  eq((await s.api({ action: 'log', bot: 'ops', text: 'halo' })).status, 409);
+  await registerLogs(s);
+  const r = await (await s.api({ action: 'log', bot: 'ops', text: 'dashboard diperbarui' })).json();
+  eq([r.ok, r.reply_to], [true, null]);
+  eq([s.sends().at(-1)!.bot, s.sends().at(-1)!.body.text], ['ops', '📝 Ops & Data: dashboard diperbarui']);
+  const t = await (await s.api({ action: 'log', bot: 'ops', text: 'progres 50%', task: 'rekap mingguan' })).json();
+  const sm = s.sends().slice(-2);
+  eq(sm.map((c) => c.bot), ['chief', 'ops'], 'induk dibuat dulu untuk tugas lama');
+  eq(sm[1].body.reply_parameters.message_id, t.reply_to);
+  const again = await (await s.api({ action: 'log', bot: 'ops', text: 'hampir beres', task_id: String(t.task_id).slice(0, 8) })).json();
+  eq(again.reply_to, t.reply_to);
+  for (const bad of ['transfer Rp 1.000', 'rek 1234567890', 'wa 0812 3456 7890']) eq((await s.api({ action: 'log', bot: 'ops', text: bad })).status, 400, bad);
+  eq((await s.api({ action: 'log', bot: 'ops', text: 'x', task: 'tidak ada' })).status, 404);
+  eq((await s.api({ action: 'log', bot: 'ops', text: 'x', task_id: 'zz' })).status, 400);
 });

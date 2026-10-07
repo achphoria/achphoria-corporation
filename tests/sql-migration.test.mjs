@@ -77,3 +77,65 @@ test('migrate-v3-telegram.sql: idempotent, privat, hanya objek ach_*', { skip: !
   await db.exec(`reset role`);
   await db.close();
 });
+
+test('migrate-v4-logs.sql: role chat, ach_tg_logmsg privat, auto-daftar grup LOGS, idempotent, hanya ach_*', { skip: !PGlite && 'PGlite tidak terpasang' }, async () => {
+  const db = new PGlite();
+  await db.exec(`
+    create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
+    grant usage on schema public to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+    create table public.other_app (id int primary key, secret text);
+    create publication supabase_realtime;
+  `);
+  await db.exec(sql('schema.sql'));
+  await db.exec(sql('migrate-v3-telegram.sql'));
+  const nonAch = async () => (await db.query(`select c.relname, c.relkind, c.relrowsecurity, coalesce(array_to_string(c.relacl, ','), '') acl
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname not like 'ach\\_%' order by 1`)).rows;
+  const before = await nonAch();
+  const pubBefore = (await db.query(`select tablename from pg_publication_tables where pubname='supabase_realtime' order by 1`)).rows;
+  // owner sudah kirim /start di grup LOGS sebelum deploy: grup lama (group) + supergroup hasil migrasi
+  await db.exec(`insert into public.ach_tg_chats (bot, chat_id, chat_type, title, last_seen) values
+    ('chief', -900, 'group', 'ACHPHORIA LOGS', now() - interval '2 min'),
+    ('chief', -100900, 'supergroup', 'ACHPHORIA LOGS', now() - interval '1 min'),
+    ('research', -100900, 'supergroup', 'ACHPHORIA LOGS', now()),
+    ('chief', -100500, 'supergroup', 'ACHPHORIA HQ', now())`);
+
+  await db.exec(sql('migrate-v4-logs.sql'));
+  await db.exec(sql('migrate-v4-logs.sql')); // idempotent
+  await db.exec(sql('migrate-v3-telegram.sql')); // v3 diulang tidak merusak
+  await db.exec(sql('migrate-v4-logs.sql'));
+
+  assert.deepEqual(await nonAch(), before, 'objek non-ach_* tidak berubah');
+  assert.deepEqual((await db.query(`select tablename from pg_publication_tables where pubname='supabase_realtime' order by 1`)).rows, pubBefore);
+  const logs = (await db.query(`select bot, chat_id::int from public.ach_tg_chats where role = 'logs' order by bot`)).rows;
+  assert.deepEqual(logs, [{ bot: 'chief', chat_id: -100900 }, { bot: 'research', chat_id: -100900 }], 'supergroup LOGS ditandai');
+  await assert.rejects(db.exec(`update public.ach_tg_chats set role = 'aneh' where chat_id = -100500`));
+
+  // grup log yang sudah dipilih manual tidak ditimpa saat migrasi diulang
+  await db.exec(`update public.ach_tg_chats set role = null where role = 'logs'; update public.ach_tg_chats set role = 'logs' where chat_id = -100500`);
+  await db.exec(sql('migrate-v4-logs.sql'));
+  assert.deepEqual((await db.query(`select distinct chat_id::int from public.ach_tg_chats where role = 'logs'`)).rows, [{ chat_id: -100500 }]);
+
+  // ach_tg_logmsg privat
+  const r = (await db.query(`select relrowsecurity from pg_class where oid = 'public.ach_tg_logmsg'::regclass`)).rows[0];
+  assert.equal(r.relrowsecurity, true);
+  assert.equal((await db.query(`select count(*)::int n from pg_policies where tablename = 'ach_tg_logmsg'`)).rows[0].n, 0);
+  for (const role of ['anon', 'authenticated']) for (const p of ['select', 'insert', 'update', 'delete']) {
+    assert.equal((await db.query(`select has_table_privilege($1, 'public.ach_tg_logmsg', $2) ok`, [role, p])).rows[0].ok, false, `${role} ${p}`);
+  }
+  await db.exec(`set role service_role`);
+  const t = (await db.query(`select public.ach_report_activity('research', null, null, null, 'Tes grup log', 'Terjadwal', null) r`)).rows[0].r;
+  await db.exec(`insert into public.ach_tg_logmsg (task_id, chat_id, message_id, agent_id) values ('${t.task_id}', -100900, 55, 'research')`);
+  await db.exec(`insert into public.ach_tg_logmsg (task_id, chat_id, message_id) values ('${t.task_id}', -100900, 56)
+                 on conflict (task_id, chat_id) do update set message_id = excluded.message_id`);
+  assert.equal((await db.query(`select message_id::int m from public.ach_tg_logmsg`)).rows[0].m, 56);
+  await db.exec(`reset role`);
+  await db.exec(`set role anon`);
+  await assert.rejects(db.query(`select * from public.ach_tg_logmsg`), /permission denied/);
+  await db.exec(`reset role`);
+  await db.exec(`delete from public.ach_tasks where id = '${t.task_id}'`);
+  assert.equal((await db.query(`select count(*)::int n from public.ach_tg_logmsg`)).rows[0].n, 0, 'cascade saat tugas dihapus');
+  await db.close();
+});
