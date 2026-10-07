@@ -60,7 +60,7 @@ node tools/ach.mjs send --bot research --chat <chat_id> --reply 345 --inbox 12 -
 - Tidak bisa menyelesaikan? `node tools/ach.mjs fail 12 --note "butuh akses GA4"` lalu jelaskan ke owner.
 - Sudah dibalas tanpa `--inbox`? `node tools/ach.mjs done 12 --note "dibalas manual"`.
 
-### 1b. Kirim gambar / dokumen (`send-photo`, `send-file`) — *DRAFT, aktif setelah ach-bridge v4.1.0 di-deploy*
+### 1b. Kirim gambar / dokumen (`send-photo`, `send-file`) — *aktif sejak ach-bridge v4.1.0*
 
 ```bash
 node tools/ach.mjs send-photo --bot research --chat <chat_id> --reply 345 --file /tmp/grafik.png --caption "Grafik tren minggu ini 📈"
