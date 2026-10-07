@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ACHPHORIA CORPORATION · Moon Base Virtual Office</title>
+  <meta name="description" content="Kantor virtual LIVE ACHPHORIA CORPORATION — markas bulan pixel-art tempat 9 agen AI bekerja." />
+  <meta name="theme-color" content="#05060f" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect x='7' y='1' width='2' height='2' fill='%23b46bff'/%3E%3Crect x='6' y='3' width='4' height='7' fill='%23eef1f7'/%3E%3Crect x='7' y='5' width='2' height='2' fill='%233dd6ff'/%3E%3Crect x='4' y='8' width='2' height='4' fill='%238a5cff'/%3E%3Crect x='10' y='8' width='2' height='4' fill='%238a5cff'/%3E%3Crect x='7' y='10' width='2' height='2' fill='%23ffc940'/%3E%3Crect x='7' y='12' width='2' height='2' fill='%23ff5fa2'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@400;600;700&family=Silkscreen&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="scene" aria-label="Markas bulan ACHPHORIA"></canvas>
+
+  <header id="logo" aria-label="ACHPHORIA CORPORATION">
+    <div class="logo-row">
+      <svg class="logo-rocket" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+        <rect x="11" y="1" width="3" height="2" fill="#b46bff"/><rect x="9" y="2" width="4" height="2" fill="#eef1f7"/><rect x="7" y="4" width="5" height="2" fill="#eef1f7"/>
+        <rect x="9" y="4" width="2" height="2" fill="#3dd6ff"/><rect x="5" y="6" width="5" height="2" fill="#dfe5f0"/><rect x="4" y="8" width="4" height="2" fill="#a9b3c7"/>
+        <rect x="10" y="6" width="2" height="3" fill="#8a5cff"/><rect x="4" y="4" width="3" height="2" fill="#8a5cff"/><rect x="2" y="10" width="3" height="2" fill="#ffc940"/><rect x="0" y="12" width="3" height="2" fill="#ff5fa2"/><rect x="1" y="14" width="2" height="1" fill="#ff9a3d"/>
+      </svg>
+      <h1 class="logo-main" data-text="ACHPHORIA"><span>ACHPHORIA</span></h1>
+      <span class="spark s1"></span><span class="spark s2"></span><span class="spark s3"></span>
+    </div>
+    <div class="logo-sub"><i></i><span>CORPORATION</span><i></i></div>
+  </header>
+
+  <div id="hud" class="hud">
+    <div class="clock"><span id="clock">--.--.--</span><small>WIB</small></div>
+    <div id="date" class="date">—</div>
+    <button id="badge" class="badge demo" title="">● DEMO</button>
+  </div>
+
+  <nav id="toolbar" class="toolbar" aria-label="Kontrol">
+    <button data-act="board"><b>☰</b> Papan Tugas <kbd>T</kbd></button>
+    <button data-act="log"><b>≡</b> Log <kbd>L</kbd></button>
+    <button data-act="roster"><b>☺</b> Kru <kbd>K</kbd></button>
+    <button data-act="home"><b>⌂</b> Overview <kbd>0</kbd></button>
+  </nav>
+  <div id="hint" class="hint">Klik astronot untuk ikuti · Scroll untuk zoom · Seret untuk geser · <kbd>Esc</kbd> kembali</div>
+
+  <aside id="roster" class="panel side-left" hidden>
+    <div class="ph"><h2>KRU ACHPHORIA</h2><button class="x" data-close="roster" aria-label="Tutup">✕</button></div>
+    <div id="rosterList" class="plist"></div>
+  </aside>
+
+  <aside id="detail" class="panel side-left" hidden>
+    <div class="ph"><h2 id="dTitle">AGEN</h2><button class="x" data-close="detail" aria-label="Tutup">✕</button></div>
+    <div id="detailBody" class="pbody"></div>
+  </aside>
+
+  <aside id="logPanel" class="panel side-right" hidden>
+    <div class="ph"><h2>LOG AKTIVITAS <span class="live-dot"></span></h2><button class="x" data-close="log" aria-label="Tutup">✕</button></div>
+    <div id="logList" class="plist"></div>
+  </aside>
+
+  <section id="board" class="panel bottom" hidden>
+    <div class="ph"><h2>PAPAN TUGAS <small id="boardCount"></small></h2><button class="x" data-close="board" aria-label="Tutup">✕</button></div>
+    <div class="cols" id="boardCols"></div>
+  </section>
+
+  <div id="tip" class="tip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <div id="loading" class="loading"><div>MENYIAPKAN MARKAS BULAN…</div></div>
+
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/util.js"></script>
+  <script src="js/profiles.js"></script>
+  <script src="js/sprites.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
