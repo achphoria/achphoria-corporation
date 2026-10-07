@@ -11,8 +11,8 @@
  * Tambahkan ?demo=1 di URL untuk memaksa mode demo.
  */
 window.ACH_CONFIG = {
-  SUPABASE_URL: 'https://ccbyqgisgclqlqatxwbk.supabase.co',
-  SUPABASE_ANON_KEY: 'sb_publishable_pdEdMAYvBL4HUF9AMp1LaA_z0rbnXsY',
+  SUPABASE_URL: 'https://ckoejqzownrujikefgwb.supabase.co',
+  SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrb2VqcXpvd25ydWppa2VmZ3diIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyMjIwNjcsImV4cCI6MjA4NTc5ODA2N30.8XLaBH3g5sysO3Lvizs1NHYke4RQJvVQEZVExC4143I',
 
   // Semua objek database memakai prefix ini (project Supabase dipakai bersama aplikasi lain).
   TABLE_PREFIX: 'ach_',
