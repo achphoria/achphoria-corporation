@@ -162,3 +162,39 @@ test('CLI: --dry-run & bantuan', () => {
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /lokasi tidak valid/);
 });
+
+/* ---------- send-photo / send-file ---------- */
+import { checkLocalFile, sniffKind } from '../tools/ach.mjs';
+const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+const PDF = new TextEncoder().encode('%PDF-1.7\n');
+const buildF = (argv, files) => buildRequest(parseArgs(argv), { env: {}, readFile: (p) => { if (!(p in files)) throw new UsageError('tidak ada'); return files[p]; } });
+
+test('send-photo / send-file: body base64, opsi, validasi', () => {
+  const b = buildF(['send-photo', '--bot', 'ops', '--file', '/tmp/g.png', '--caption', 'grafik', '--chat', '-100123', '--reply', '31', '--inbox', '4', '--silent'], { '/tmp/g.png': PNG });
+  assert.deepEqual({ ...b, file_base64: undefined }, { action: 'send_photo', bot: 'ops', filename: 'g.png', caption: 'grafik', chat_id: -100123, reply_to_message_id: 31, inbox_id: 4, silent: true, file_base64: undefined });
+  assert.deepEqual(Buffer.from(b.file_base64, 'base64'), Buffer.from(PNG));
+  const d = buildF(['send-file', '--bot', 'ops', '--file', 'r.pdf'], { 'r.pdf': PDF });
+  assert.equal(d.action, 'send_file'); assert.equal(d.chat_id, undefined);
+  assert.equal(sniffKind(PDF), 'pdf');
+  assert.throws(() => buildF(['send-photo', '--bot', 'ops', '--file', 'r.pdf'], { 'r.pdf': PDF }), UsageError);
+  assert.throws(() => buildF(['send-file', '--bot', 'ops', '--file', 'x.png'], { 'x.png': PDF }), /tidak cocok/);
+  assert.throws(() => buildF(['send-file', '--bot', 'ops'], {}), /--file/);
+  assert.throws(() => buildF(['send-file', '--file', 'r.pdf'], { 'r.pdf': PDF }), /--bot/);
+  assert.throws(() => buildF(['send-file', '--bot', 'ops', '--file', 'r.pdf', '--caption', 'Rp 10.000'], { 'r.pdf': PDF }), /caption ditolak/);
+  assert.throws(() => checkLocalFile('a.png', new Uint8Array(0), 'photo'), /kosong/);
+  assert.throws(() => checkLocalFile('a.gif', PNG, 'document'), /tidak didukung/);
+});
+
+test('send-file via main(): file asli di disk, dry-run tidak mencetak base64, POST ke bridge', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'achf-'));
+  const f = join(dir, 'lap.pdf'); writeFileSync(f, PDF);
+  const outs = [];
+  assert.equal(await main(['send-file', '--bot', 'ops', '--file', f, '--dry-run'], { env: {}, out: (m) => outs.push(m), err: () => {} }), 0);
+  assert.match(outs[0], /<\d+ karakter base64>/);
+  let seen;
+  const fetchImpl = async (url, init) => { seen = { url, init }; return new Response(JSON.stringify({ ok: true, method: 'sendDocument' }), { status: 200 }); };
+  assert.equal(await main(['send-file', '--bot', 'ops', '--file', f], { env: { ACH_BRIDGE_KEY: 'k-test' }, fetchImpl, out: () => {}, err: () => {} }), 0);
+  assert.equal(seen.init.headers['x-ach-key'], 'k-test');
+  assert.equal(JSON.parse(seen.init.body).action, 'send_file');
+  assert.equal(await main(['send-file', '--bot', 'ops', '--file', join(dir, 'nope.pdf')], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl, out: () => {}, err: () => {} }), 1);
+});

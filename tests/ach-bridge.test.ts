@@ -1,7 +1,7 @@
 // Tes lokal Edge Function ach-bridge dengan Supabase (PostgREST) & Telegram tiruan.
 // Jalankan: deno test --allow-none tests/ach-bridge.test.ts   (tanpa jaringan, tanpa secret asli)
 import { FakeDb } from './fake-postgrest.ts';
-import { createHandler, parseCommand, sensitiveReason, splitText, safeEqual } from '../supabase/functions/ach-bridge/handler.ts';
+import { createHandler, parseCommand, sensitiveReason, splitText, safeEqual, sniffKind, checkFile, PHOTO_MAX } from '../supabase/functions/ach-bridge/handler.ts';
 
 // deno-lint-ignore no-explicit-any
 type Row = Record<string, any>;
@@ -20,7 +20,7 @@ const HQ = -100500;
 const LOGS = -100900;
 
 interface Env { [k: string]: string }
-function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolean } = {}) {
+function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolean; photoError?: string } = {}) {
   const db = new FakeDb();
   const tgCalls: { bot: string; method: string; body: Row }[] = [];
   const wakeCalls: { url: string; headers: Headers; body: Row }[] = [];
@@ -35,7 +35,11 @@ function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolea
   // deno-lint-ignore require-await
   const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    let body: Row;
+    if (init?.body instanceof FormData) {
+      body = {};
+      for (const [k, v] of init.body.entries()) body[k] = typeof v === 'string' ? v : { name: (v as File).name, size: (v as File).size, type: (v as File).type };
+    } else body = init?.body ? JSON.parse(String(init.body)) : undefined as unknown as Row;
     const headers = new Headers(init?.headers);
     if (url.hostname === 'fake.supabase.co') {
       assert(headers.get('apikey') === env.SUPABASE_SERVICE_ROLE_KEY, 'apikey header');
@@ -46,7 +50,8 @@ function setup(extraEnv: Env = {}, opts: { wakeStatus?: number; tgThrow?: boolea
       const bot = Object.entries(TOKENS).find(([, v]) => v === m[1])?.[0] ?? '?';
       if (opts.tgThrow) throw new TypeError(`error sending request for url (${url.href}): connection refused`);
       tgCalls.push({ bot, method: m[2], body });
-      return Response.json({ ok: true, result: m[2] === 'sendMessage' ? { message_id: ++msgId } : true });
+      if (m[2] === 'sendPhoto' && opts.photoError) return Response.json({ ok: false, error_code: 400, description: opts.photoError });
+      return Response.json({ ok: true, result: /^send(Message|Photo|Document)$/.test(m[2]) ? { message_id: ++msgId } : true });
     }
     if (url.hostname === 'wake.example') {
       wakeCalls.push({ url: url.href, headers, body });
@@ -100,7 +105,7 @@ Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async 
 Deno.test('health & routing', async () => {
   const s = setup();
   const r = await s.handler(new Request('http://localhost/ach-bridge/health'));
-  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v4.0.0' });
+  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v4.1.0' });
   eq((await s.handler(new Request('http://localhost/ach-bridge?action=health'))).status, 200);
   eq((await s.handler(new Request('http://localhost/ach-bridge/nope', { method: 'POST' }))).status, 404);
 });
@@ -559,4 +564,77 @@ Deno.test('LOGS: action log — posting bebas sebagai bot sendiri, berutas di ba
   for (const bad of ['transfer Rp 1.000', 'rek 1234567890', 'wa 0812 3456 7890']) eq((await s.api({ action: 'log', bot: 'ops', text: bad })).status, 400, bad);
   eq((await s.api({ action: 'log', bot: 'ops', text: 'x', task: 'tidak ada' })).status, 404);
   eq((await s.api({ action: 'log', bot: 'ops', text: 'x', task_id: 'zz' })).status, 400);
+});
+
+/* ---------- send_photo / send_file ---------- */
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
+const PDF = new TextEncoder().encode('%PDF-1.4\n%%EOF');
+const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
+
+Deno.test('file: sniffKind & checkFile (ekstensi + magic bytes + ukuran)', () => {
+  eq([sniffKind(PNG), sniffKind(JPG), sniffKind(PDF), sniffKind(new Uint8Array([1, 2, 3]))], ['png', 'jpg', 'pdf', null]);
+  eq(checkFile('a.PNG', PNG, 'photo'), { kind: 'png' });
+  eq(checkFile('a.jpeg', JPG, 'photo'), { kind: 'jpg' });
+  assert('error' in checkFile('a.pdf', PDF, 'photo'), 'pdf bukan foto');
+  eq(checkFile('a.pdf', PDF, 'document'), { kind: 'pdf' });
+  assert('error' in checkFile('a.png', PDF, 'document'), 'magic tidak cocok');
+  assert('error' in checkFile('a.exe', PNG, 'document'), 'ekstensi');
+  const big = new Uint8Array(21 * 1024 * 1024); big.set(PDF);
+  assert('error' in checkFile('a.pdf', big, 'document'), 'terlalu besar');
+});
+
+Deno.test('send_photo: default chat owner, multipart sendPhoto, caption, reply, outbox, inbox selesai', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('research', s.priv('halo'));
+  const r = await s.api({ action: 'send_photo', bot: 'research', filename: '/x/../grafik.png', file_base64: b64(PNG), caption: 'grafik minggu ini', reply_to_message_id: 9, inbox_id: 1 });
+  const j = await r.json();
+  eq([r.status, j.ok, j.method, j.chat_id], [200, true, 'sendPhoto', OWNER]);
+  const c = s.tgCalls.filter((x) => x.method === 'sendPhoto').at(-1)!;
+  eq([c.bot, c.body.chat_id, c.body.caption, c.body.photo.name, c.body.photo.type, c.body.photo.size], ['research', String(OWNER), 'grafik minggu ini', 'grafik.png', 'image/png', PNG.length]);
+  eq(JSON.parse(c.body.reply_parameters).message_id, 9);
+  const ob = s.db.tables.ach_outbox.at(-1)!;
+  eq([ob.ok, ob.text, ob.telegram_message_id], [true, '[photo] grafik.png — grafik minggu ini', j.message_id]);
+  eq(s.db.tables.ach_inbox.find((x) => x.id === 1)?.status, 'selesai');
+});
+
+Deno.test('send_photo: fallback ke sendDocument bila Telegram menolak foto', async () => {
+  const s = setup({}, { photoError: 'Bad Request: PHOTO_INVALID_DIMENSIONS' });
+  s.allowOwner();
+  await s.tgPost('ops', s.priv('halo'));
+  const j = await (await s.api({ action: 'send_photo', bot: 'ops', filename: 'a.jpg', file_base64: b64(JPG) })).json();
+  eq([j.ok, j.method], [true, 'sendDocument']);
+  assert(/PHOTO_INVALID/.test(j.fallback));
+  eq(s.tgCalls.at(-1)!.body.document.type, 'image/jpeg');
+});
+
+Deno.test('send_photo: foto > 10MB langsung sebagai dokumen', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('ops', s.priv('halo'));
+  const big = new Uint8Array(PHOTO_MAX + 10); big.set(PNG);
+  let bin = ''; for (let i = 0; i < big.length; i += 8192) bin += String.fromCharCode(...big.subarray(i, i + 8192));
+  const j = await (await s.api({ action: 'send_photo', bot: 'ops', filename: 'a.png', file_base64: btoa(bin) })).json();
+  eq([j.ok, j.method], [true, 'sendDocument']);
+  eq(s.tgCalls.filter((x) => x.method === 'sendPhoto').length, 0);
+});
+
+Deno.test('send_file: pdf, chat dikenal, validasi & filter caption & auth', async () => {
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('chief', s.grp('halo'));
+  const j = await (await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'laporan.pdf', file_base64: b64(PDF), caption: 'laporan' })).json();
+  eq([j.ok, j.method, j.chat_id], [true, 'sendDocument', HQ]);
+  eq(s.tgCalls.at(-1)!.body.document.type, 'application/pdf');
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: -1009999, filename: 'a.pdf', file_base64: b64(PDF) })).status, 403);
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'a.pdf', file_base64: b64(PDF), caption: 'transfer Rp 5.000' })).status, 400);
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'a.pdf', file_base64: b64(PDF), caption: 'wa 0812 3456 7890' })).status, 400);
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'a.pdf', file_base64: b64(PNG) })).status, 400);
+  eq((await s.api({ action: 'send_photo', bot: 'chief', chat_id: HQ, filename: 'a.pdf', file_base64: b64(PDF) })).status, 400);
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'a.pdf' })).status, 400);
+  eq((await s.api({ action: 'send_file', bot: 'chief', chat_id: HQ, filename: 'a.pdf', file_base64: '%%%' })).status, 400);
+  eq((await s.api({ action: 'send_file', bot: 'chief', filename: 'a.pdf', file_base64: b64(PDF) }, 'salah')).status, 401);
+  eq((await s.api({ action: 'send_file', bot: 'research', filename: 'a.pdf', file_base64: b64(PDF) })).status, 409);
+  eq(s.tgCalls.filter((x) => x.method === 'sendDocument').length, 1, 'yang ditolak tidak terkirim');
 });
