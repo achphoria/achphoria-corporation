@@ -1,0 +1,8 @@
+# Konfigurasi minimal Supabase CLI untuk repo ini (hanya dipakai saat deploy Edge Function).
+# Project: ckoejqzownrujikefgwb (selalu deploy dengan --project-ref ckoejqzownrujikefgwb).
+project_id = "achphoria-corporation"
+
+[functions.ach-bridge]
+# Telegram & asisten tidak mengirim JWT Supabase; autentikasi dilakukan di dalam fungsi
+# (X-Telegram-Bot-Api-Secret-Token untuk webhook, x-ach-key untuk /api).
+verify_jwt = false
