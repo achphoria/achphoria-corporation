@@ -36,9 +36,22 @@ Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdas
 | Log aktivitas | 8 terbaru selalu di sidebar; `L` / "Semua" membuka log lengkap. Entri baru muncul dengan animasi, waktu dalam WIB |
 | Tim | Selalu terlihat di sidebar; `K` membuka daftar Tim versi besar (dengan nomor tombol) |
 | Tooltip | Arahkan kursor ke maskot atau fasilitas (kotatsu, stasiun teh, vending, …) |
-| Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan peta lantai, graf jalan, dan titik-titik bernama |
+| Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan peta lantai, graf jalan, dan titik-titik bernama · `?hidup=cepat` mempercepat semua timer perilaku maskot ±10× (untuk uji) · `?hidup=tenang` mensimulasikan *reduced motion* |
 
-## Struktur file
+## Maskot hidup (v4)
+
+Semua perilaku ini **murni visual di browser**: tidak pernah menulis ke database, dan **lokasi/status resmi dari data selalu menang**. Sidebar, log, dan Papan Tugas hanya menampilkan data resmi; label di atas maskot boleh menampilkan detour sementara (mis. "sedang ambil teh").
+
+| Perilaku | Keterangan |
+|---|---|
+| Animasi idle | Tiap maskot punya jadwal acak sendiri (tidak pernah serempak): lirik kiri/kanan, menguap, peregangan tangan, angguk sambil mengetik, menyeruput. Kebiasaan khas: **Research** membalik halaman buku, **Ops** mengetuk/menggeser tablet, **Chief** membuka & membaca gulungan, **Content** menyeruput teh atau pose jepret kamera, **Engineering** memutar obeng. |
+| Jalan-jalan | Tiap ±2–6 menit (acak per agen) seorang agen bisa jalan ke stasiun teh, vending, papan tulis, jendela, atau menyamperi rekan untuk ngobrol. Ia diam 10–40 dtk, lalu kembali. Maksimal 2 agen pergi sekaligus (1 di malam hari). Agen offline, yang sedang rapat, atau sedang tidur siang tidak ikut. Status *kerja* lebih jarang jalan-jalan daripada *istirahat/santai*. Jika data berubah di tengah jalan, detour dibatalkan dan maskot langsung menuju lokasi resminya. |
+| Interaksi | Agen yang berdekatan saling menghadap, melambai 👋, lalu bergantian memunculkan gelembung kecil (💬 😄 💡 ☕). Di kotatsu (≥2 agen), satu agen mendapat giliran bicara (gelembung + sedikit memantul) sementara yang lain menoleh dan mengangguk. |
+| Reaksi data | Dari realtime maupun demo: tugas menjadi **Selesai** → lompat gembira + ✨ + konfeti kecil; tugas baru / menjadi **Sedang kerja** → ❗ di atas label; baris log baru → 📝 kecil. |
+| Kantuk | Jika agen tidak mengirim update > 45 menit (tapi belum lewat `STALE_HOURS`), idle-nya melambat, sesekali terkantuk-kantuk 💤 lalu tersentak bangun ❕. Lewat `STALE_HOURS` tetap kembali ke jadwal fallback seperti biasa. |
+| Ritme WIB | Pagi 06–11: jalan lebih cepat & lebih sering jalan-jalan · 11.30–13.30: cenderung ke konter ramen · ±15.00: cenderung jajan di vending · setelah 19.00: gerak lebih pelan, lebih sering menguap, jarang jalan-jalan. |
+| Reduced motion | Jika OS/browser meminta *prefers-reduced-motion*: tanpa jalan-jalan, tanpa lompatan/konfeti, animasi idle jarang & halus. |
+
 
 ```
 index.html                    halaman utama
@@ -50,7 +63,10 @@ js/util.js                    utilitas, format waktu WIB
 js/profiles.js                5 agen, kunci ruangan, status, jadwal fallback WIB
 js/assets.js                  pemuat gambar + pose duduk yang dibuat di kode
 js/world.js                   peta lantai, graf waypoint, titik bernama, area tooltip, skala perspektif
-js/sim.js                     simulasi agen: rute, reservasi kursi, pose, squash & stretch, emote
+js/sim.js                     simulasi agen: rute, reservasi kursi, pose, squash & stretch, emote,
+                              animasi idle (lirik, menguap, peregangan, kebiasaan khas), detour visual
+js/life.js                    "maskot hidup": ritme jam WIB, jalan-jalan, obrolan, giliran bicara rapat,
+                              reaksi data (✨ ❗ 📝), kantuk, partikel kilau/konfeti
 js/fx.js                      suasana & cahaya: lampion, uap teh/ramen, monitor & LED yang bereaksi pada data,
                               papan "Hari ini", pencahayaan sprite (cahaya lokal + rim light), tint siang/malam
 js/data.js                    Supabase LIVE + fallback DEMO (+ deteksi database v1)

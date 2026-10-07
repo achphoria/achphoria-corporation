@@ -85,6 +85,7 @@
       it.a.draw(ctx, t);
     }
     fx.drawFront(ctx, t);
+    if (ACH.life) ACH.life.drawParticles(ctx, t);
     if (DEBUG) drawDebug();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     drawOverlays(t, dt);
@@ -117,7 +118,8 @@
       const [ax, ay] = toDev(g.x, g.top - 3);
       if (ax < 4 * dpr || ay < -40 * dpr || ax > cw - 4 * dpr || ay > ch - 10 * dpr) continue; // jangkar di luar panggung → tanpa label
       const name = d.name || a.id;
-      const [emo, txt] = ACH.activityShort(a.id, d.eff, { walking: a.walking, room: a.room });
+      // label panggung (detour/kantuk/bicara) hanya di panggung; sidebar & log tetap data resmi
+      const [emo, txt] = a.stageLabel() || ACH.activityShort(a.id, d.eff, { walking: a.walking && !a.detour, room: a.room });
       ctx.font = `700 ${fs}px ${UI_FONT}`;
       const wn = ctx.measureText(name).width + fs * 0.85;
       ctx.font = `500 ${fa}px ${UI_FONT}`;
@@ -220,8 +222,60 @@
         });
         ctx.restore();
       }
+      // pop reaksi data (❗ ✨ ❕) di atas label
+      if (a.pop) {
+        const p = a.pop, kk = Math.min(1, p.t / 0.28), out = Math.max(0, (p.t - (p.dur - 0.3)) / 0.3);
+        const sz = ACH.clamp(zoom * 15, 15, 26) * dpr;
+        const sc = (0.4 + 0.6 * kk + 0.35 * Math.sin(kk * Math.PI)) * (1 - out * 0.4);
+        ctx.save(); ctx.globalAlpha = 1 - out;
+        ctx.translate(bx + T.w / 2, by - sz * 0.62 - Math.sin(Math.min(1, p.t / 0.5) * Math.PI) * 6 * dpr); ctx.scale(sc, sc);
+        ctx.fillStyle = 'rgba(252,247,237,0.96)'; ctx.shadowColor = 'rgba(30,18,8,0.35)'; ctx.shadowBlur = 6 * dpr;
+        ctx.beginPath(); ctx.arc(0, 0, sz * 0.62, 0, 7); ctx.fill(); ctx.shadowColor = 'transparent';
+        ctx.lineWidth = 1.6 * dpr; ctx.strokeStyle = p.ch === '✨' ? '#e0a64a' : '#c0392b'; ctx.stroke();
+        ctx.font = `${Math.round(sz * 0.78)}px ${EMOJI_FONT}`; ctx.textAlign = 'center';
+        ctx.fillText(p.ch, 0, sz * 0.04); ctx.restore();
+      }
+      // blip 📝 (log baru) naik dari sudut kanan atas label
+      if (a.blips.length) {
+        ctx.save(); ctx.textAlign = 'center';
+        a.blips.forEach((b, i) => {
+          const kb = b.t / 1.6;
+          ctx.globalAlpha = Math.min(1, b.t / 0.2) * (1 - kb);
+          ctx.font = `${Math.round(ACH.clamp(zoom * 11, 11, 18) * dpr)}px ${EMOJI_FONT}`;
+          ctx.fillText(b.ch, bx + T.w - 4 * dpr + i * 9 * dpr, by - 4 * dpr - kb * 26 * dpr);
+        });
+        ctx.restore();
+      }
     }
+    drawBubbles(t, zoom);
     ctx.textAlign = 'left';
+  }
+  // gelembung obrolan kecil di samping kepala, ke arah hadapan maskot
+  function drawBubbles(t, zoom) {
+    for (const a of sim.actors) {
+      const b = a.bubble;
+      if (!b || !a.data) continue;
+      const g = a.geom(t);
+      const side = g.face || 1;
+      const [hx, hy] = toDev(g.x + side * g.dw * 0.42, g.top + g.dh * 0.2);
+      if (hx < 0 || hy < 0 || hx > cw || hy > ch) continue;
+      const r = ACH.clamp(zoom * 10.5, 10, 19) * dpr;
+      const kk = Math.min(1, b.t / 0.22), out = Math.max(0, (b.t - (b.dur - 0.28)) / 0.28);
+      const sc = (0.5 + 0.5 * kk + 0.18 * Math.sin(kk * Math.PI)) * (1 - 0.3 * out);
+      const cx = hx + side * r * 1.15, cy = hy - r * 0.75 - Math.sin(b.t * 2.4) * 1.5 * dpr;
+      ctx.save(); ctx.globalAlpha = 1 - out;
+      ctx.translate(cx, cy); ctx.scale(sc, sc);
+      ctx.fillStyle = 'rgba(253,249,240,0.97)'; ctx.shadowColor = 'rgba(30,18,8,0.32)'; ctx.shadowBlur = 5 * dpr; ctx.shadowOffsetY = 1.5 * dpr;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+      // ekor ke kepala
+      ctx.beginPath(); ctx.moveTo(-side * r * 0.35, r * 0.7); ctx.lineTo(-side * r * 1.15, r * 1.15); ctx.lineTo(-side * r * 0.75, r * 0.2); ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.beginPath(); ctx.arc(-side * r * 1.35, r * 1.4, r * 0.16, 0, 7); ctx.fill();
+      ctx.lineWidth = 1 * dpr; ctx.strokeStyle = 'rgba(46,58,99,0.22)'; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.stroke();
+      ctx.font = `${Math.round(r * 1.12)}px ${EMOJI_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(b.ch, 0, r * 0.06);
+      ctx.restore();
+    }
   }
 
   /* ---------------- loop ---------------- */

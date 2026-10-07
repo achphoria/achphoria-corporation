@@ -5,7 +5,7 @@
   const P = CFG.TABLE_PREFIX;
   const T_AGENTS = P + 'agents', T_TASKS = P + 'tasks', T_LOGS = P + 'logs';
 
-  const store = (ACH.store = { mode: 'connecting', agents: {}, tasks: {}, logs: [], error: null, ev: {} });
+  const store = (ACH.store = { mode: 'connecting', agents: {}, tasks: {}, logs: [], error: null, ev: {}, cfg: CFG });
   store.on = (e, f) => (store.ev[e] = store.ev[e] || []).push(f);
   store.emit = (e, d) => (store.ev[e] || []).forEach((f) => { try { f(d); } catch (err) { console.error(err); } });
 

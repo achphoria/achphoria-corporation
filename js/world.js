@@ -64,6 +64,16 @@
     ],
   };
   SPOTS.home.chief = Object.assign(SPOTS.meeting[0], { work: true });
+  // v4: titik "jalan-jalan" ambient (bukan kunci ruangan resmi — murni visual)
+  SPOTS.window = [sp('win-1', 300, 505, 'wb', { face: -1 }), sp('win-2', 340, 532, ['wb', 'lft'], { face: -1 })];
+  // posisi tamu saat mengunjungi meja rekan (untuk ngobrol); kunci = id spot rekan
+  const VISIT = {
+    'home-research': sp('visit-research', 300, 590, 'nook', { face: -1 }),
+    'home-ops': sp('visit-ops', 498, 460, ['lft', 'dk'], { face: -1 }),
+    'k-front': sp('visit-chief', 904, 648, ['r2', 'f1'], { face: -1 }),
+    'home-content': sp('visit-content', 990, 614, ['r1', 'r2'], { face: 1 }),
+    'home-engineering': sp('visit-engineering', 924, 462, ['bk', 'b4'], { face: 1 }),
+  };
   // preferensi kursi rapat per agen (Chief of Staff selalu di depan)
   const MEET_PREF = { chief: 'k-front', research: 'k-left', content: 'k-fright', ops: 'k-bleft', engineering: 'k-bright' };
 
@@ -123,5 +133,26 @@
     return pts;
   }
 
-  ACH.world = { scaleAt, FLOOR, NODES: N, EDGES: E, SPOTS, MEET_PREF, AREAS, route };
+  function inFloor(x, y) {
+    let c = false;
+    for (let i = 0, j = FLOOR.length - 1; i < FLOOR.length; j = i++) {
+      const [xi, yi] = FLOOR[i], [xj, yj] = FLOOR[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+    }
+    return c;
+  }
+  // titik kunjungan dinamis di samping rekan (untuk rekan yang tidak di mejanya)
+  function visitSpot(target, fromX) {
+    if (target.at && VISIT[target.at.id]) return VISIT[target.at.id];
+    const side = fromX < target.x ? -1 : 1;
+    const cand = [[side * 62, 8], [-side * 62, 8], [side * 44, 42], [-side * 44, 42], [0, 60]];
+    for (const [dx, dy] of cand) {
+      const x = target.x + dx, y = target.y + dy;
+      if (!inFloor(x, y)) continue;
+      return sp('visit-' + target.id, x, y, nearestNodes(x, y, 2).map((n) => n[0]), { face: dx > 0 ? -1 : 1 });
+    }
+    return null;
+  }
+
+  ACH.world = { scaleAt, FLOOR, NODES: N, EDGES: E, SPOTS, MEET_PREF, AREAS, route, inFloor, visitSpot, nearestNodes };
 })();
