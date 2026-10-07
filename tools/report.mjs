@@ -9,13 +9,15 @@
  *   ⚠️ Key ini RAHASIA: hanya untuk agen/server, JANGAN taruh di website / config.js.
  *
  * Contoh:
- *   node tools/report.mjs --agent commander --status kerja --location meeting \
- *     --activity "Memimpin rapat mingguan" --task "Sinkronisasi OKR Q4" \
- *     --task-status "Sedang kerja" --log "mulai rapat di Meeting Room"
+ *   node tools/report.mjs --agent chief --status terjadwal --location meeting \
+ *     --activity "Stand-up pagi di kotatsu" --task "Rencana prioritas Q4" \
+ *     --task-status "Sedang kerja" --log "gabung rapat di kotatsu"
  *
- *   node tools/report.mjs commander santai kantin "Ngopi dulu"          # bentuk singkat (posisional)
+ *   node tools/report.mjs content istirahat tea "Seduh teh hijau"          # bentuk singkat (posisional)
  *
- * Kunci lokasi : desk meeting kantin arcade gym sleep shower dance outdoor command rocket
+ * Agen (id)    : chief research ops content engineering
+ * Kunci lokasi : desk meeting tea ramen tatami vending whiteboard offline
+ *                (desk = zona kerja agen sendiri: kotatsu / pojok baca / meja monitor / pojok konten / booth server)
  *                ('' = kosongkan → website pakai jadwal harian otomatis)
  * Status       : kerja terjadwal santai istirahat offline
  * Status tugas : "Sedang kerja" | "Terjadwal" | "Selesai"
@@ -27,7 +29,8 @@ const HELP = `Pemakaian:
 
 Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (atau SUPABASE_SECRET_KEY)`;
 
-const ROOMS = ['desk', 'meeting', 'kantin', 'arcade', 'gym', 'sleep', 'shower', 'dance', 'outdoor', 'command', 'rocket'];
+const AGENTS = ['chief', 'research', 'ops', 'content', 'engineering'];
+const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'whiteboard', 'offline'];
 const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'];
 const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'];
 
@@ -55,6 +58,7 @@ const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET
 if (!url || !key) { console.error('✖ Set env SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY terlebih dahulu.'); process.exit(1); }
 if (key.startsWith('sb_publishable_')) { console.error('✖ Itu publishable key (hanya baca). Pakai secret / service_role key.'); process.exit(1); }
 
+if (!AGENTS.includes(args.agent)) console.warn('⚠ Agen "' + args.agent + '" bukan id v2 (' + AGENTS.join(', ') + '). Tetap dikirim — server akan menolak bila tidak ada.');
 if (args.status && !STATUSES.includes(args.status)) { console.error('✖ Status tidak valid. Pilih: ' + STATUSES.join(', ')); process.exit(1); }
 if (args.location && !ROOMS.includes(args.location)) { console.error('✖ Lokasi tidak valid. Pilih: ' + ROOMS.join(', ')); process.exit(1); }
 if (args.task_status && !TASK_STATUSES.includes(args.task_status)) { console.error('✖ Status tugas tidak valid. Pilih: ' + TASK_STATUSES.join(' | ')); process.exit(1); }

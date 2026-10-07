@@ -9,11 +9,15 @@ Env:
   ⚠️ Key ini RAHASIA: hanya untuk agen/server, JANGAN taruh di website / config.js.
 
 Contoh:
-  python3 tools/report.py --agent commander --status kerja --location meeting \\
-      --activity "Memimpin rapat mingguan" --task "Sinkronisasi OKR Q4" \\
-      --task-status "Sedang kerja" --log "mulai rapat di Meeting Room"
+  python3 tools/report.py --agent chief --status terjadwal --location meeting \\
+      --activity "Stand-up pagi di kotatsu" --task "Rencana prioritas Q4" \\
+      --task-status "Sedang kerja" --log "gabung rapat di kotatsu"
 
-  python3 tools/report.py commander santai kantin "Ngopi dulu"     # bentuk singkat (posisional)
+  python3 tools/report.py content istirahat tea "Seduh teh hijau"     # bentuk singkat (posisional)
+
+Agen (id)    : chief research ops content engineering
+Kunci lokasi : desk meeting tea ramen tatami vending whiteboard offline
+               (desk = zona kerja agen sendiri; '' = jadwal otomatis)
 """
 import argparse
 import json
@@ -22,15 +26,16 @@ import sys
 import urllib.error
 import urllib.request
 
-ROOMS = ["desk", "meeting", "kantin", "arcade", "gym", "sleep", "shower", "dance", "outdoor", "command", "rocket"]
+AGENTS = ["chief", "research", "ops", "content", "engineering"]
+ROOMS = ["desk", "meeting", "tea", "ramen", "tatami", "vending", "whiteboard", "offline"]
 STATUSES = ["kerja", "terjadwal", "santai", "istirahat", "offline"]
 TASK_STATUSES = ["Sedang kerja", "Terjadwal", "Selesai"]
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Laporkan aktivitas agen ke ACHPHORIA virtual office (ach_report_activity).")
+    p = argparse.ArgumentParser(description="Laporkan aktivitas agen ke kantor virtual ACHPHORIA (ach_report_activity).")
     p.add_argument("pos", nargs="*", help="bentuk singkat: agent status location activity [task] [task_status] [log]")
-    p.add_argument("--agent")
+    p.add_argument("--agent", help="id agen: " + ", ".join(AGENTS))
     p.add_argument("--status", choices=STATUSES)
     p.add_argument("--location", help="kunci ruangan: " + ", ".join(ROOMS) + " ('' = jadwal otomatis)")
     p.add_argument("--activity")
@@ -46,6 +51,8 @@ def main() -> int:
     if not a.agent:
         p.print_help()
         return 1
+    if a.agent not in AGENTS:
+        print(f"⚠ Agen \"{a.agent}\" bukan id v2 ({', '.join(AGENTS)}). Tetap dikirim — server akan menolak bila tidak ada.", file=sys.stderr)
     if a.status and a.status not in STATUSES:
         print("✖ Status tidak valid. Pilih: " + ", ".join(STATUSES), file=sys.stderr)
         return 1

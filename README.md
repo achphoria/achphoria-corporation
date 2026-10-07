@@ -1,55 +1,94 @@
-# 🚀 ACHPHORIA CORPORATION — Moon Base Virtual Office
+# 🏮 ACHPHORIA CORPORATION — Kantor Virtual (gaya Jepang)
 
-Kantor virtual **LIVE** bergaya pixel-art untuk ACHPHORIA CORPORATION: markas manusia di Bulan, dipotong melintang seperti game base-building. Sembilan agen AI (plus 36 kru tim dan beberapa kru lapangan) bekerja, makan, olahraga, tidur, dansa, sampai main bola bareng alien. Semuanya digambar prosedural di `<canvas>`, tanpa aset gambar sama sekali, lalu disinkronkan **realtime** dengan Supabase.
+Kantor virtual **LIVE** untuk ACHPHORIA CORPORATION: sebuah kantor mungil bergaya Jepang, seperti rumah boneka dari clay yang dipotong melintang dan dilihat dari atas serong. Lima maskot clay berbentuk kacang (satu per divisi, memakai jaket *happi* indigo) bekerja, rapat di kotatsu, menyeduh teh, makan ramen, jajan di vending machine, dan tidur siang di tatami. Semua gerakan mereka disinkronkan **realtime** dengan Supabase.
 
-- **Permukaan:** menara komando dengan radar berputar, landasan roket (uap idle), panel surya, rover, hatch lift, dan kubah force-field tempat kru main bareng alien (blob bermata satu, makhluk berantena, anjing alien, bola, perosotan). Bumi berputar pelan di langit berbintang.
-- **Bawah tanah:** 3 lantai × 3 modul kantor divisi, masing-masing berisi 1 meja leader + 4 meja tim. Semua lantai tersambung lift kaca di tengah.
-- **Lantai bawah (B):** Meeting Room (meja hologram), Kantin, Arcade, Gym, Sleep Pods, Showers, Dance Floor (DJ bot + lampu disko). Ada juga hidroponik, ruang server, reaktor, dan tambang helium-3.
-- **UI (Bahasa Indonesia, jam WIB):** Papan Tugas (`T`), Log (`L`), daftar Kru (`K`), kartu detail agen, tooltip, serta badge **LIVE/DEMO**.
+![Overview kantor ACHPHORIA](assets/preview.webp)
+
+- **Latar:** satu ilustrasi diorama clay (dinding pasir, kayu ash, tekstil indigo, tanaman sage, bantal terakota, cahaya amber). Isinya: pojok baca dengan jendela shoji, rak buku, taman zen dan bonsai; meja multi-monitor; kotatsu dengan 5 bantal duduk; booth server berkaca; corkboard, kamera tripod, dan rak tanaman; stasiun teh dengan kyusu beruap plus konter ramen 3 bangku; pintu noren; vending machine; papan tulis; lampion; dan monstera.
+- **Karakter:** sprite maskot clay di atas latar. Ukurannya mengikuti perspektif (makin depan makin besar), urutan gambarnya diatur menurut kedalaman (y), ada bayangan kontak, dan bagian depan kotatsu ikut menutupi agen yang duduk di belakangnya.
+- **Animasi:** jalan melompat dengan *squash & stretch*, napas pelan saat diam, kedip mata, getar mengetik di meja, duduk di bantal atau bangku, tidur berbaring dengan "z", serta gelembung emote 💬 ☕ 🍜 💡 🥤.
+- **Suasana:** lampion bergoyang dan berkerlip, uap dari kyusu, kedip monitor dan LED server, vending machine berpendar, debu melayang di cahaya jendela, dan tint siang/sore/malam yang mengikuti jam WIB.
+- **UI (Bahasa Indonesia, jam WIB):** panel kertas washi, aksen indigo, tombol clay, wordmark ACHPHORIA dengan stempel hanko merah 達成 ("pencapaian"). Tersedia Papan Tugas (`T`), Log (`L`), daftar Tim (`K`), kartu detail agen, tooltip, dan badge **LIVE/DEMO**.
+
+## Agen (v2)
+
+| id | Nama tampilan | Warna | Properti | Zona "desk" |
+|---|---|---|---|---|
+| `chief` | Chief of Staff | rose pudar `#d98c8c` | gulungan | kotatsu (kursi depan) |
+| `research` | Research | biru langit `#8fb8de` | tumpukan buku | pojok baca (bantal dekat rak buku) |
+| `ops` | Ops & Data | sage `#8fae8b` | tablet grafik | meja multi-monitor |
+| `content` | Content & Marketing | abu hangat `#a8a29a` | secangkir teh | pojok konten (corkboard + kamera) |
+| `engineering` | Engineering | amber `#e0a64a` | obeng | booth server |
+
+Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdasarkan `id`.
 
 ## Fitur
 
 | Fitur | Cara pakai |
 |---|---|
-| Ikuti agen | Klik astronot (atau item di daftar Kru / Log / Papan Tugas, atau tombol `1`–`9`). Kamera zoom lalu mengikuti agen, termasuk saat naik lift dan keluar ke permukaan. |
+| Ikuti agen | Klik maskot (atau item di daftar Tim / Log / Papan Tugas, atau tombol `1`–`5`). Kamera zoom lalu mengikuti agen, dan kartu detail terbuka. |
 | Kembali ke overview | `Esc`, klik area kosong, tombol ✕, atau `0` |
-| Zoom & geser | Scroll mouse untuk zoom. Seret untuk menggeser (saat tidak sedang mengikuti agen). Saat mengikuti, scroll mengatur level zoom. |
-| Papan Tugas | `T` / tombol. Tiga kolom: **Sedang kerja · Terjadwal · Selesai** |
-| Log aktivitas | `L` / tombol. Entri baru muncul dengan animasi, waktu dalam WIB |
-| Kru | `K` / tombol. Daftar 9 agen beserta status dan lokasinya |
+| Zoom & geser | Scroll untuk zoom di sekitar kursor, seret untuk menggeser. Saat mengikuti agen, scroll mengatur level zoom. |
+| Papan Tugas | `T`. Tiga kolom: **Sedang kerja · Terjadwal · Selesai** |
+| Log aktivitas | `L`. Entri baru muncul dengan animasi, waktu dalam WIB |
+| Tim | `K`. Lima agen beserta status, lokasi, dan aktivitasnya |
+| Tooltip | Arahkan kursor ke maskot atau fasilitas (kotatsu, stasiun teh, vending, …) |
+| Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan peta lantai, graf jalan, dan titik-titik bernama |
 
 ## Struktur file
 
 ```
-index.html            halaman utama
-config.js             URL + publishable key Supabase (AMAN untuk publik)
-css/style.css         gaya UI
-js/util.js            utilitas, font bitmap, format waktu WIB
-js/profiles.js        profil agen, label ruangan/status, jadwal fallback WIB
-js/sprites.js         generator sprite astronot pixel-art
-js/world.js           tata letak + layer statis (langit, batu, ruangan, furnitur)
-js/fx.js              elemen animasi (bintang, Bumi, radar, lift, disko, kubah, alien, partikel)
-js/sim.js             simulasi aktor, pathfinding lantai + lift, spot ruangan
-js/data.js            Supabase LIVE + fallback DEMO
-js/app.js             loop render, kamera, input, panel UI
-supabase/schema.sql   skema database (idempotent, prefix ach_)
-tools/report.mjs      CLI laporan (Node 18+, tanpa dependensi)
-tools/report.py       CLI laporan (Python 3, stdlib saja)
-.nojekyll             supaya GitHub Pages menyajikan file apa adanya
+index.html                    halaman utama
+config.js                     URL + publishable key Supabase (AMAN untuk publik)
+css/style.css                 gaya UI (washi, indigo, tombol clay)
+assets/                       latar 2560×1440 + versi kecil, potongan depan kotatsu,
+                              3 lampion, 5 maskot (+ varian mata tertutup), favicon (± 0,7 MB)
+js/util.js                    utilitas, format waktu WIB
+js/profiles.js                5 agen, kunci ruangan, status, jadwal fallback WIB
+js/assets.js                  pemuat gambar + pose duduk yang dibuat di kode
+js/world.js                   peta lantai, graf waypoint, titik bernama, area tooltip, skala perspektif
+js/sim.js                     simulasi agen: rute, reservasi kursi, pose, squash & stretch, emote
+js/fx.js                      suasana: lampion, uap, monitor, LED server, vending, debu, tint siang/malam
+js/data.js                    Supabase LIVE + fallback DEMO (+ deteksi database v1)
+js/app.js                     loop render, kamera, input, panel UI
+supabase/schema.sql           skema LENGKAP v2 untuk instalasi baru (idempotent, prefix ach_)
+supabase/migrate-v2-kantor.sql migrasi database v1 (markas bulan, 9 agen) → v2
+tools/report.mjs              CLI laporan (Node 18+, tanpa dependensi)
+tools/report.py               CLI laporan (Python 3, stdlib saja)
+.nojekyll                     supaya GitHub Pages menyajikan file apa adanya
 ```
+
+### Aset
+
+Tidak ada generator gambar yang dipakai. Semua aset dibuat dari dua gambar referensi:
+
+- **Latar:** ilustrasi kantor diperbesar 2× (EDSR super-resolution) menjadi 2560×1440 WebP. Lampion dipotong menjadi sprite terpisah supaya bisa bergoyang, dan dinding di belakangnya di-*inpaint*. Bagian depan kotatsu (meja + selimut) dipotong dengan alpha untuk efek oklusi.
+- **Maskot:** dipotong dari lembar maskot, latar belakangnya dihapus dengan `rembg` (model isnet-general-use). Untuk tiap maskot dibuat juga varian **mata tertutup** (mata di-*inpaint* lalu digambar garis lengkung) yang dipakai saat kedip dan tidur.
+- **Pose dibuat di kode:** *idle* (napas), *jalan* (lompat + squash & stretch + miring + balik arah), *duduk* (kaki dipotong dengan alas membulat), *bangku* (duduk dengan tinggi dudukan), *tidur* (diputar berbaring di atas bantal kecil, mata tertutup, "z").
 
 ## Setup
 
 ### 1. Supabase
 
-1. Buka project Supabase (boleh project yang sudah ada; semua objek pakai prefix **`ach_`**, jadi tidak bentrok dengan aplikasi lain).
-2. Buka **SQL Editor**, tempel isi [`supabase/schema.sql`](supabase/schema.sql), lalu klik **Run**. Skrip ini aman dijalankan berulang kali dan membuat:
-   - tabel `ach_agents`, `ach_tasks`, `ach_logs` (+ index, trigger `updated_at`)
-   - RLS aktif: publik (anon/authenticated) **hanya bisa SELECT**
-   - fungsi `ach_report_activity(...)` (SECURITY DEFINER, EXECUTE **hanya** untuk `service_role`)
-   - menambahkan ketiga tabel ke publikasi `supabase_realtime`
-   - data awal: 9 agen + beberapa contoh tugas dan log (data yang sudah ada tidak ditimpa)
-3. Buka **Project Settings → API Keys**, salin **Project URL** dan **Publishable key** (`sb_publishable_…`; key `anon` lama juga bisa).
+**Instalasi baru:** buka **SQL Editor**, tempel isi [`supabase/schema.sql`](supabase/schema.sql), lalu **Run**. Skrip ini aman diulang dan membuat:
+- tabel `ach_agents`, `ach_tasks`, `ach_logs` (+ index, trigger `updated_at`)
+- RLS aktif: publik (anon/authenticated) **hanya bisa SELECT**
+- fungsi `ach_report_activity(...)` (SECURITY DEFINER, EXECUTE **hanya** untuk `service_role`, memvalidasi id/lokasi/status v2)
+- tabel ach_* masuk ke publikasi `supabase_realtime`
+- 5 agen v2 + contoh tugas dan log (data yang sudah ada tidak ditimpa)
+
+**Sudah pakai v1 (markas bulan, 9 agen)?** Jalankan [`supabase/migrate-v2-kantor.sql`](supabase/migrate-v2-kantor.sql) **sekali** di SQL Editor. Skrip ini idempotent, berjalan dalam satu transaksi, dan hanya menyentuh objek `ach_*`:
+
+1. Kalau data v1 terdeteksi, skrip **menghapus** baris seed 9 agen lama (`commander`, `engineering`, `research`, `marketing`, `content`, `sales`, `finance`, `success`, `hr`) beserta tugas dan log mereka. Agen v1 `engineering`/`research`/`content` dikenali dari nama lamanya (Engineer/Researcher/Creator), jadi agen v2 dengan id yang sama tidak ikut terhapus kalau skrip diulang.
+2. Lokasi lama milik agen lain yang tersisa dikosongkan (mereka lalu memakai jadwal otomatis).
+3. CHECK constraint lokasi dan status diganti dengan kunci v2.
+4. Lima agen v2 dimasukkan. Kalau id sudah ada, hanya nama/divisi/warna/urutan yang dirapikan.
+5. Contoh tugas dan log ditambahkan untuk 5 agen, hanya kalau mereka belum punya.
+6. Fungsi `ach_report_activity` diganti dengan validasi v2.
+7. RLS, policy SELECT publik, grant, dan publikasi realtime ditegaskan ulang.
+8. Diakhiri dengan `notify pgrst, 'reload schema'`.
+
+Sebelum migrasi dijalankan, website tetap tampil dalam **DEMO** dengan badge `DEMO | DB v1`. Klik badge untuk melihat alasannya. Begitu 5 agen v2 ada dan tidak ada lagi agen v1, website **otomatis pindah ke LIVE** (dicek tiap 30 detik).
 
 ### 2. `config.js`
 
@@ -65,60 +104,57 @@ window.ACH_CONFIG = {
 
 ### 3. GitHub Pages
 
-1. Push repo ini ke GitHub.
-2. Buka **Settings → Pages**: *Source* = **Deploy from a branch**, *Branch* = **`main`** dan folder **`/ (root)`**, lalu **Save**.
-3. Tunggu 1–2 menit, lalu buka `https://<user>.github.io/achphoria-corporation/`.
-
-Bisa juga dijalankan lokal tanpa build: `python3 -m http.server 8000` lalu buka `http://localhost:8000`.
+*Settings → Pages*: *Deploy from a branch* → **`main`** / **`/ (root)`**. Website: `https://achphoria.github.io/achphoria-corporation/`.
+Untuk menjalankan lokal tanpa build: `python3 -m http.server 8000`.
 
 ## LIVE vs DEMO
 
-- Saat dibuka, website langsung tampil dalam **DEMO** (data simulasi) supaya tidak ada layar kosong, sambil mencoba konek ke Supabase.
-- Kalau `ach_agents` bisa dibaca dan ada isinya, badge berubah jadi **● LIVE**. Website lalu subscribe ke Realtime (`postgres_changes` pada `ach_agents`, `ach_tasks`, `ach_logs`) dan update instan tanpa refresh. Sebagai cadangan, ada refresh penuh tiap 60 detik.
-- Kalau `config.js` kosong, library Supabase gagal dimuat, tabel belum dibuat (schema.sql belum dijalankan), atau query gagal, website tetap di **● DEMO**. Di mode ini ada aktivitas simulasi tiap 20–40 detik, dan koneksi dicoba ulang tiap 30 detik. Begitu data tersedia, website **otomatis pindah ke LIVE**.
-- Klik badge untuk melihat alasannya. Tambahkan `?demo=1` di URL untuk memaksa mode demo.
+- Saat dibuka, website langsung tampil dalam **DEMO** (data simulasi) sambil mencoba konek ke Supabase.
+- Kalau `ach_agents` bisa dibaca **dan** berisi kelima agen v2 (tanpa agen v1), badge berubah jadi **● LIVE**. Website lalu subscribe ke Realtime (`postgres_changes` pada `ach_agents`, `ach_tasks`, `ach_logs`), dengan refresh penuh tiap 60 detik sebagai cadangan.
+- Website tetap di DEMO, dengan alasan singkat di badge, kalau: `config.js` kosong, tabel belum ada, tabel kosong, database masih v1, agen v2 belum lengkap, atau query gagal. Koneksi dicoba ulang tiap 30 detik.
 
 ## Ruangan (kolom `location`)
 
-| Kunci | Ruangan | Animasi |
+| Kunci | Tempat | Yang terjadi |
 |---|---|---|
-| `desk` | Meja leader di modul divisi agen | duduk & mengetik, sesekali menghampiri anggota tim |
-| `meeting` | Meeting Room (meja hologram) | rapat, gestur bicara |
-| `kantin` | Kantin | makan / ngopi / antre di konter |
-| `arcade` | Arcade Room | main mesin arcade, bersorak |
-| `gym` | Gym | treadmill, angkat beban slow-motion, samsak, peregangan |
-| `sleep` | Sleep Pods (9 kapsul) | tidur + "Zzz" |
-| `shower` | Showers (3 bilik) | mandi + uap, antre |
-| `dance` | Dance Floor | dansa melayang (gravitasi rendah) |
-| `outdoor` | Kubah luar (permukaan) | main lempar bola bareng alien |
-| `command` | Menara Komando (permukaan) | jaga konsol radar |
-| `rocket` | Landasan Roket (permukaan) | inspeksi / perbaiki roket |
+| `desk` | zona kerja agen sendiri (lihat tabel agen) | duduk/berdiri di zonanya; mengetik (getar kecil) atau membaca |
+| `meeting` | kotatsu, 5 bantal (Chief selalu di kursi depan) | duduk; bergantian bicara 💬 |
+| `tea` | stasiun teh (kyusu beruap) | berdiri di konter, menyesap ☕ |
+| `ramen` | konter ramen, 3 bangku (+2 tempat berdiri) | duduk di bangku, menyeruput 🍜 |
+| `tatami` | pojok tatami (2 tempat) | berbaring di bantal kecil, mata tertutup, "z" |
+| `vending` | vending machine | jajan 🥤 |
+| `whiteboard` | papan tulis | corat-coret ide 💡 |
+| `offline` | pintu noren | berjalan ke noren, melambai 👋, lalu redup |
 
-Kalau lokasi agen berubah, sprite-nya berjalan ke sana: menyusuri lantai, naik/turun **lift kaca** (2 jalur: naik di kanan, turun di kiri), lalu lewat hatch permukaan untuk tujuan di luar. Setelah sampai, ia menjalankan animasi ruangan tersebut.
+Kunci yang tidak dikenal dianggap `desk`. Agen dengan status `offline` selalu berada di noren. Saat lokasi berubah, maskot berjalan melalui graf waypoint di lantai: lewat koridor di belakang kotatsu, di depannya, atau di sisi kiri/kanan.
 
-**Status:** `kerja` · `terjadwal` · `santai` · `istirahat` · `offline` (agen `offline` tidur di sleep pod dengan sprite redup).
+**Status:** `kerja` · `terjadwal` · `santai` · `istirahat` · `offline`
 
 ### Jadwal fallback (WIB)
 
-Dipakai bila `location` kosong (NULL) atau data agen **basi** (`updated_at` lebih lama dari `STALE_HOURS`, default 3 jam). Kartu detail lalu menampilkan label *jadwal otomatis*.
+Jadwal ini dipakai kalau `location` kosong (NULL) atau data agen **basi** (`updated_at` lebih tua dari `STALE_HOURS`, default 3 jam). Kartu detail lalu menampilkan label *jadwal otomatis*. Variasi "giliran" ditentukan per agen per hari secara deterministik, jadi semua pengunjung melihat hal yang sama.
 
-| Jam WIB | Lokasi |
+| Jam WIB (Senin–Jumat) | Lokasi |
 |---|---|
-| 00.00–06.00 | `sleep` |
-| 06.00–06.45 | `gym` (olahraga pagi) |
-| 06.45–07.15 | `shower` |
-| 07.15–08.00 | `kantin` (sarapan) |
-| 08.00–09.00 | `desk` |
-| 09.00–09.30 | `meeting` (daily stand-up) |
-| 09.30–12.00 | `desk` (Commander kadang di `command`) |
-| 12.00–13.00 | `kantin` (makan siang) |
-| 13.00–15.30 | `desk` |
-| 15.30–16.30 | variasi harian: `gym` / `arcade` / `desk` |
-| 16.30–18.00 | `desk` |
-| 18.00–19.00 | `kantin` (makan malam) |
-| 19.00–21.00 | variasi: `dance` / `outdoor` / `arcade` / `kantin` (Closer kadang di `rocket`) |
-| 21.00–22.00 | `shower` |
-| 22.00–24.00 | `sleep` |
+| 00.00–07.30 | `offline` (belum masuk) |
+| 07.30–08.30 | 2 agen bergiliran di `tea` (teh pagi), sisanya di `desk` |
+| 08.30–09.00 | `desk` (cek inbox) |
+| **09.00–09.30** | **`meeting`: stand-up pagi di kotatsu** |
+| 09.30–10.30 | `desk` |
+| 10.30–10.50 | rehat teh untuk 2 agen bergiliran (`tea`) |
+| 10.50–12.00 | `desk`; Chief & Ops kadang di `whiteboard` (11.00–11.40, rencana sprint) |
+| **12.00–13.00** | **`ramen`: makan siang bareng** |
+| 13.00–14.30 | `desk` |
+| 14.30–15.00 | sebagian agen tidur siang di `tatami` (±40% peluang per hari), sisanya `desk` |
+| **15.00–15.20** | **`vending`: jajan jam tiga** (2 agen bergiliran) |
+| 15.20–16.00 | `desk` |
+| 16.00–16.20 | rehat teh sore (`tea`, 2 agen bergiliran) |
+| 16.30–17.00 (Jumat) | `meeting`: retro mingguan |
+| 16.20–17.30 | `desk` |
+| 17.30–18.00 | `desk` (wrap-up); Chief di `whiteboard` (rekap harian) |
+| 18.00–19.00 | Engineering (dan kadang Content) lembur di `desk`, lainnya `offline` |
+| 19.00–24.00 | `offline` (sudah pulang) |
+| Sabtu–Minggu | `offline`; Engineering cek server 10.00–11.00 |
 
 ## Integrasi agen AI
 
@@ -126,19 +162,18 @@ Agen melapor lewat fungsi Postgres **`ach_report_activity`**:
 
 ```sql
 ach_report_activity(
-  p_agent_id    text,               -- id agen, mis. 'commander'
+  p_agent_id    text,               -- chief | research | ops | content | engineering
   p_status      text,               -- kerja|terjadwal|santai|istirahat|offline (NULL = tidak diubah)
-  p_location    text,               -- kunci ruangan (NULL = tidak diubah, '' = kosongkan → jadwal otomatis)
+  p_location    text,               -- desk|meeting|tea|ramen|tatami|vending|whiteboard|offline
+                                    -- (NULL = tidak diubah, '' = kosongkan → jadwal otomatis)
   p_activity    text,               -- kalimat aktivitas singkat (NULL = tidak diubah)
   p_task        text default null,  -- judul tugas: di-update bila sudah ada (case-insensitive), dibuat bila belum
   p_task_status text default null,  -- 'Sedang kerja' (default) | 'Terjadwal' | 'Selesai'
-  p_log         text default null   -- pesan log TANPA nama agen, mis. 'mulai rapat di Meeting Room'
+  p_log         text default null   -- pesan log TANPA nama agen, mis. 'gabung rapat di kotatsu'
 ) returns jsonb
 ```
 
-Fungsi ini sekaligus meng-update baris agen, membuat atau meng-update tugas, dan menambah baris log, lalu semua browser yang terbuka langsung ikut ter-update. Log tampil sebagai: `16.30 WIB · Commander mulai rapat di Meeting Room`.
-
-ID agen bawaan: `commander`, `engineering`, `research`, `marketing`, `content`, `sales`, `finance`, `success`, `hr`. Nama, divisi, dan warna bisa diubah langsung di tabel `ach_agents` (urutan modul = `sort_order`).
+Fungsi ini meng-update baris agen, membuat atau meng-update tugas, dan menambah log dalam satu panggilan. Semua browser yang terbuka langsung ikut ter-update. Id, lokasi, atau status yang tidak valid ditolak dengan pesan yang jelas. `p_location = 'offline'` tanpa `p_status` otomatis membuat status menjadi `offline`. Log tampil sebagai: `12.05 WIB · Engineering makan ramen dulu di konter 🍜`.
 
 ### curl
 
@@ -150,13 +185,13 @@ curl -X POST "$SUPABASE_URL/rest/v1/rpc/ach_report_activity" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "p_agent_id": "commander",
-    "p_status": "kerja",
+    "p_agent_id": "chief",
+    "p_status": "terjadwal",
     "p_location": "meeting",
-    "p_activity": "Memimpin rapat koordinasi mingguan",
-    "p_task": "Sinkronisasi OKR Q4",
+    "p_activity": "Stand-up pagi di kotatsu",
+    "p_task": "Rencana prioritas Q4",
     "p_task_status": "Sedang kerja",
-    "p_log": "mulai rapat di Meeting Room"
+    "p_log": "gabung rapat di kotatsu"
   }'
 ```
 
@@ -168,7 +203,7 @@ curl -X POST "$SUPABASE_URL/rest/v1/rpc/ach_report_activity" \
 curl -X POST "$SUPABASE_URL/rest/v1/ach_tasks" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" -H "Prefer: return=representation" \
-  -d '{"agent_id":"finance","title":"Rekap invoice Oktober","detail":"Cocokkan dengan mutasi bank","status":"Terjadwal","due_at":"2026-10-08T10:00:00+07:00"}'
+  -d '{"agent_id":"ops","title":"Rekap data penjualan Oktober","detail":"Kirim ke Chief of Staff","status":"Terjadwal","due_at":"2026-10-08T10:00:00+07:00"}'
 ```
 
 **Ubah status tugas** (mis. jadi Selesai):
@@ -179,31 +214,23 @@ curl -X PATCH "$SUPABASE_URL/rest/v1/ach_tasks?id=eq.<uuid-tugas>" \
   -d '{"status":"Selesai"}'
 ```
 
-**Tambah log via REST:**
-
-```bash
-curl -X POST "$SUPABASE_URL/rest/v1/ach_logs" \
-  -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Content-Type: application/json" \
-  -d '{"agent_id":"sales","message":"closing deal dengan Lunar Logistics 🎉","location":"desk"}'
-```
-
 ### CLI siap pakai
 
 ```bash
 # Node 18+ (tanpa npm install)
 node tools/report.mjs --agent engineering --status kerja --location desk \
-  --activity "Deploy fitur realtime" --task "Migrasi server ke region baru" --log "mulai deploy ke production"
+  --activity "Memantau server" --task "Migrasi database ke region Jakarta" --log "mulai migrasi database"
 
 # bentuk singkat: agent status location activity [task] [task_status] [log]
-node tools/report.mjs finance istirahat kantin "Ngopi sambil cek cashflow"
+node tools/report.mjs content istirahat tea "Seduh teh hijau"
 
 # Python 3 (stdlib saja)
-python3 tools/report.py --agent content --status santai --location outdoor \
-  --activity "Rekam konten bareng alien" --log "keluar ke Kubah Luar, main bareng alien"
-python3 tools/report.py --agent hr --task "Update SOP keselamatan base" --task-status Selesai --log "menyelesaikan SOP keselamatan ✔"
+python3 tools/report.py --agent research --status istirahat --location tatami \
+  --activity "Tidur siang 20 menit" --log "tidur siang sebentar di pojok tatami"
+python3 tools/report.py --agent ops --task "Dashboard metrik operasional" --task-status Selesai --log "menyelesaikan dashboard ✔"
 ```
 
-Kedua CLI membaca `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` (alias `SUPABASE_SECRET_KEY`) dari environment.
+Kedua CLI membaca `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` (alias `SUPABASE_SECRET_KEY`) dari environment, lalu memvalidasi lokasi/status sebelum mengirim.
 
 ## Keamanan
 

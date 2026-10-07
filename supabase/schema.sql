@@ -1,22 +1,26 @@
 -- =====================================================================
---  ACHPHORIA CORPORATION · Moon Base Virtual Office — skema Supabase
+--  ACHPHORIA CORPORATION · Kantor Virtual (v2, gaya Jepang) — skema Supabase
 -- ---------------------------------------------------------------------
+--  • Untuk instalasi BARU. Database yang masih v1 (markas bulan, 9 agen)
+--    → jalankan supabase/migrate-v2-kantor.sql (bukan file ini).
 --  • Idempotent: aman dijalankan berulang kali di Supabase SQL Editor.
 --  • SEMUA objek memakai prefix  ach_  karena project Supabase ini dipakai
---    bersama aplikasi lain (mis. Vertex8). Skrip ini TIDAK menyentuh objek
---    lain selain menambahkan tabel ach_* ke publikasi supabase_realtime.
+--    bersama aplikasi lain. Skrip ini TIDAK menyentuh objek lain selain
+--    menambahkan tabel ach_* ke publikasi supabase_realtime.
 --  • Website (anon / publishable key) hanya bisa SELECT.
 --    Penulisan hanya lewat service_role (bypass RLS) atau fungsi
 --    public.ach_report_activity(...) yang EXECUTE-nya hanya untuk service_role.
 --
---  Kunci ruangan (kolom location):
---    desk     = meja kerja di modul divisi agen
---    meeting  = Meeting Room (meja hologram)      kantin  = Kantin
---    arcade   = Arcade Room                        gym     = Gym
---    sleep    = Sleep Pods                         shower  = Showers
---    dance    = Dance Floor                        outdoor = Kubah luar (main sama alien)
---    command  = Menara Komando (permukaan)         rocket  = Landasan roket (permukaan)
---    NULL     = ikut jadwal harian otomatis (WIB) di website
+--  Kunci ruangan (kolom location) — kantor bergaya Jepang (v2):
+--    desk       = zona kerja milik agen:
+--                 chief → kotatsu · research → pojok baca · ops → meja multi-monitor
+--                 content → pojok konten (corkboard + kamera) · engineering → booth server
+--    meeting    = rapat di kotatsu          tea        = stasiun teh (kyusu)
+--    ramen      = konter ramen (3 bangku)   tatami     = tidur siang di pojok tatami
+--    vending    = mesin minuman             whiteboard = papan tulis
+--    offline    = pulang / keluar lewat pintu noren
+--    NULL       = ikut jadwal harian otomatis (WIB) di website
+--  Agen (id): chief, research, ops, content, engineering
 --  Status: kerja | terjadwal | santai | istirahat | offline
 --  Status tugas: 'Sedang kerja' | 'Terjadwal' | 'Selesai'
 -- =====================================================================
@@ -39,9 +43,9 @@ create table if not exists public.ach_agents (
   constraint ach_agents_color_check    check (color ~ '^#[0-9A-Fa-f]{6}$'),
   constraint ach_agents_status_check   check (status in ('kerja','terjadwal','santai','istirahat','offline')),
   constraint ach_agents_location_check check (location is null or location in
-    ('desk','meeting','kantin','arcade','gym','sleep','shower','dance','outdoor','command','rocket'))
+    ('desk','meeting','tea','ramen','tatami','vending','whiteboard','offline'))
 );
-comment on table public.ach_agents is 'ACHPHORIA virtual office: 9 agen AI (urutan modul = sort_order).';
+comment on table public.ach_agents is 'ACHPHORIA kantor virtual v2: 5 agen AI (chief, research, ops, content, engineering).';
 
 create table if not exists public.ach_tasks (
   id         uuid primary key default gen_random_uuid(),
@@ -54,7 +58,7 @@ create table if not exists public.ach_tasks (
   updated_at timestamptz not null default now(),
   constraint ach_tasks_status_check check (status in ('Sedang kerja','Terjadwal','Selesai'))
 );
-comment on table public.ach_tasks is 'ACHPHORIA virtual office: papan tugas.';
+comment on table public.ach_tasks is 'ACHPHORIA kantor virtual: papan tugas.';
 
 create table if not exists public.ach_logs (
   id         bigserial primary key,
@@ -63,12 +67,26 @@ create table if not exists public.ach_logs (
   location   text,
   created_at timestamptz not null default now()
 );
-comment on table public.ach_logs is 'ACHPHORIA virtual office: log aktivitas (tulis tanpa nama agen di depan, mis. "mulai rapat di Meeting Room").';
+comment on table public.ach_logs is 'ACHPHORIA kantor virtual: log aktivitas (tulis tanpa nama agen di depan, mis. "gabung rapat di kotatsu").';
 
 create index if not exists ach_tasks_agent_idx   on public.ach_tasks (agent_id);
 create index if not exists ach_tasks_status_idx  on public.ach_tasks (status, updated_at desc);
 create index if not exists ach_logs_created_idx  on public.ach_logs (created_at desc);
 create index if not exists ach_logs_agent_idx    on public.ach_logs (agent_id, created_at desc);
+
+-- Pastikan CHECK lokasi memakai kunci v2 walau tabel sudah ada sebelumnya.
+-- NOT VALID: tidak memeriksa baris lama (data v1 dibereskan oleh migrate-v2-kantor.sql),
+-- tetapi semua INSERT/UPDATE baru wajib memakai kunci v2.
+alter table public.ach_agents drop constraint if exists ach_agents_location_check;
+alter table public.ach_agents add constraint ach_agents_location_check
+  check (location is null or location in ('desk','meeting','tea','ramen','tatami','vending','whiteboard','offline')) not valid;
+do $$
+begin
+  alter table public.ach_agents validate constraint ach_agents_location_check;
+exception when check_violation then
+  raise notice 'ACHPHORIA: masih ada lokasi v1 di ach_agents — jalankan supabase/migrate-v2-kantor.sql';
+end;
+$$;
 
 -- ---------------------------------------------------------------------
 -- Trigger updated_at
@@ -119,13 +137,16 @@ grant usage, select on sequence public.ach_logs_id_seq to service_role;
 -- ---------------------------------------------------------------------
 -- Fungsi laporan untuk agen AI (hanya service_role)
 -- ---------------------------------------------------------------------
---  p_status      : kerja|terjadwal|santai|istirahat|offline (NULL = tidak diubah)
---  p_location    : kunci ruangan (NULL = tidak diubah, '' = kosongkan → jadwal otomatis)
+--  p_agent_id    : chief | research | ops | content | engineering
+--  p_status      : kerja|terjadwal|santai|istirahat|offline (NULL/'' = tidak diubah)
+--  p_location    : desk|meeting|tea|ramen|tatami|vending|whiteboard|offline
+--                  (NULL = tidak diubah, '' = kosongkan → jadwal otomatis WIB)
+--                  location 'offline' tanpa p_status otomatis membuat status 'offline'
 --  p_activity    : kalimat aktivitas singkat (NULL = tidak diubah)
 --  p_task        : judul tugas; dicocokkan (case-insensitive) dengan tugas agen ini,
 --                  di-update bila ada, dibuat bila belum ada
 --  p_task_status : 'Sedang kerja' (default) | 'Terjadwal' | 'Selesai'
---  p_log         : pesan log (tanpa nama agen), mis. 'mulai rapat di Meeting Room'
+--  p_log         : pesan log (tanpa nama agen), mis. 'gabung rapat di kotatsu'
 create or replace function public.ach_report_activity(
   p_agent_id    text,
   p_status      text,
@@ -145,17 +166,35 @@ declare
   v_log_id      bigint;
   v_task        text := nullif(btrim(coalesce(p_task, '')), '');
   v_task_status text := coalesce(nullif(btrim(coalesce(p_task_status, '')), ''), 'Sedang kerja');
+  v_status      text := nullif(btrim(coalesce(p_status, '')), '');
+  v_loc_in      text := case when p_location is null then null else btrim(p_location) end;
   v_location    text;
 begin
   if p_agent_id is null or not exists (select 1 from public.ach_agents a where a.id = p_agent_id) then
-    raise exception 'Agen "%" tidak ditemukan di public.ach_agents', p_agent_id using errcode = 'P0002';
+    raise exception 'Agen "%" tidak ditemukan di public.ach_agents (id v2: chief, research, ops, content, engineering)', p_agent_id
+      using errcode = 'P0002';
+  end if;
+  if v_status is not null and v_status not in ('kerja','terjadwal','santai','istirahat','offline') then
+    raise exception 'Status "%" tidak valid. Pilihan: kerja, terjadwal, santai, istirahat, offline', v_status
+      using errcode = '22023';
+  end if;
+  if v_loc_in is not null and v_loc_in <> '' and v_loc_in not in ('desk','meeting','tea','ramen','tatami','vending','whiteboard','offline') then
+    raise exception 'Lokasi "%" tidak valid. Pilihan: desk, meeting, tea, ramen, tatami, vending, whiteboard, offline ('''' = jadwal otomatis)', v_loc_in
+      using errcode = '22023';
+  end if;
+  if v_task is not null and v_task_status not in ('Sedang kerja','Terjadwal','Selesai') then
+    raise exception 'Status tugas "%" tidak valid. Pilihan: Sedang kerja, Terjadwal, Selesai', v_task_status
+      using errcode = '22023';
+  end if;
+  if v_status is null and v_loc_in = 'offline' then
+    v_status := 'offline';
   end if;
 
   update public.ach_agents a set
-    status       = coalesce(nullif(btrim(coalesce(p_status, '')), ''), a.status),
-    location     = case when p_location is null then a.location
-                        when btrim(p_location) = '' then null
-                        else btrim(p_location) end,
+    status       = coalesce(v_status, a.status),
+    location     = case when v_loc_in is null then a.location
+                        when v_loc_in = '' then null
+                        else v_loc_in end,
     activity     = coalesce(p_activity, a.activity),
     current_task = case when v_task is null then a.current_task
                         when v_task_status = 'Selesai' then (case when lower(a.current_task) = lower(v_task) then null else a.current_task end)
@@ -194,7 +233,7 @@ revoke all on function public.ach_report_activity(text, text, text, text, text, 
 grant execute on function public.ach_report_activity(text, text, text, text, text, text, text) to service_role;
 
 -- ---------------------------------------------------------------------
--- Realtime: tambahkan tabel ach_* ke publikasi supabase_realtime (idempotent)
+-- Realtime: pastikan tabel ach_* ada di publikasi supabase_realtime (idempotent)
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -215,47 +254,42 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------
--- Data awal (tidak menimpa data yang sudah ada)
+-- Data awal: 5 agen v2 (tidak menimpa data yang sudah ada)
 -- ---------------------------------------------------------------------
 insert into public.ach_agents (id, name, division, color, sort_order, status, location, activity, current_task) values
-  ('commander',   'Commander',  'Chief of Staff',      '#ffc940', 1, 'kerja',     'meeting', 'Memimpin rapat koordinasi mingguan',      'Sinkronisasi OKR Q4'),
-  ('engineering', 'Engineer',   'Engineering',         '#2ee6c5', 2, 'kerja',     'desk',    'Deploy fitur realtime ke production',     'Migrasi server ke region baru'),
-  ('research',    'Researcher', 'Research & Data',     '#3dd6ff', 3, 'kerja',     'meeting', 'Presentasi insight data pengguna',        'Analisis retensi bulan ini'),
-  ('marketing',   'Marketer',   'Marketing & Growth',  '#ff5fa2', 4, 'kerja',     'desk',    'Nyiapin kampanye peluncuran',             'Kampanye "Moon Week"'),
-  ('content',     'Creator',    'Content & Creative',  '#ff9a3d', 5, 'santai',    'outdoor', 'Rekam konten main bola bareng alien',     'Video behind-the-scenes base'),
-  ('sales',       'Closer',     'Sales & Partnership', '#4d7dff', 6, 'kerja',     'desk',    'Follow-up calon partner dari Bumi',       'Proposal kemitraan Lunar Logistics'),
-  ('finance',     'Treasurer',  'Finance',             '#ffe14d', 7, 'istirahat', 'kantin',  'Ngopi sambil cek cashflow',               'Rekap budget Q4'),
-  ('success',     'Helper',     'Customer Success',    '#6dff7a', 8, 'santai',    'gym',     'Angkat beban slow-motion (gravitasi 1/6!)', 'Balas tiket pelanggan prioritas'),
-  ('hr',          'Counsel',    'HR & Legal',          '#b46bff', 9, 'terjadwal', 'desk',    'Review kontrak kerja sama',               'Update SOP keselamatan base')
+  ('chief',       'Chief of Staff',      'Chief of Staff',      '#d98c8c', 1, 'kerja',     'meeting', 'Memimpin stand-up di kotatsu',              'Rencana prioritas Q4'),
+  ('research',    'Research',            'Research',            '#8fb8de', 2, 'kerja',     'desk',    'Membaca laporan riset di pojok baca',       'Riset tren pasar Asia Tenggara'),
+  ('ops',         'Ops & Data',          'Ops & Data',          '#8fae8b', 3, 'kerja',     'desk',    'Memantau dashboard di meja multi-monitor',  'Dashboard metrik operasional'),
+  ('content',     'Content & Marketing', 'Content & Marketing', '#a8a29a', 4, 'istirahat', 'tea',     'Seduh teh sambil cari ide konten',          'Seri video "Sehari di Kantor"'),
+  ('engineering', 'Engineering',         'Engineering',         '#e0a64a', 5, 'kerja',     'desk',    'Memantau server di booth kaca',             'Migrasi database ke region Jakarta')
 on conflict (id) do nothing;
 
 insert into public.ach_tasks (agent_id, title, detail, status, due_at)
 select v.agent_id, v.title, v.detail, v.status, v.due_at
 from (values
-  ('commander',   'Sinkronisasi OKR Q4',                'Samakan target semua divisi untuk kuartal ini.', 'Sedang kerja', null::timestamptz),
-  ('commander',   'Siapkan agenda all-hands',           'Agenda rapat besar Jumat.',                      'Terjadwal',    now() + interval '1 day'),
-  ('engineering', 'Migrasi server ke region baru',      'Pindah ke region dengan latensi terendah ke Bumi.', 'Sedang kerja', null),
-  ('engineering', 'Upgrade firmware lift kaca',         'Rilis v2.3 untuk kontrol lift.',                 'Selesai',      null),
-  ('research',    'Analisis retensi bulan ini',         'Cohort pengguna baru vs lama.',                  'Sedang kerja', null),
-  ('marketing',   'Kampanye "Moon Week"',               'Konten 7 hari + iklan.',                         'Sedang kerja', null),
-  ('content',     'Video behind-the-scenes base',       'Rekam kegiatan kru & alien di kubah.',           'Sedang kerja', null),
-  ('sales',       'Proposal kemitraan Lunar Logistics', 'Draft proposal + harga.',                        'Terjadwal',    now() + interval '6 hours'),
-  ('finance',     'Rekap budget Q4',                    'Rekap realisasi vs rencana.',                    'Terjadwal',    now() + interval '2 days'),
-  ('success',     'Balas tiket pelanggan prioritas',    'Target SLA < 2 jam.',                            'Sedang kerja', null),
-  ('hr',          'Update SOP keselamatan base',        'Termasuk prosedur airlock kubah.',               'Terjadwal',    now() + interval '1 day')
+  ('chief',       'Rencana prioritas Q4',               'Samakan target kelima divisi untuk kuartal ini.',  'Sedang kerja', null::timestamptz),
+  ('chief',       'Agenda rapat mingguan',              'Agenda stand-up & retro Jumat di kotatsu.',        'Terjadwal',    now() + interval '1 day'),
+  ('research',    'Riset tren pasar Asia Tenggara',     'Ringkasan peluang 3 negara prioritas.',            'Sedang kerja', null),
+  ('research',    'Ringkasan 5 paper AI terbaru',       'Catatan singkat untuk tim.',                       'Terjadwal',    now() + interval '2 days'),
+  ('ops',         'Dashboard metrik operasional',       'KPI harian di tiga layar meja multi-monitor.',     'Sedang kerja', null),
+  ('ops',         'Rekap data penjualan mingguan',      'Kirim ke Chief of Staff setiap Jumat.',            'Terjadwal',    now() + interval '6 hours'),
+  ('content',     'Seri video "Sehari di Kantor"',      'Rekam aktivitas tim di pojok kamera.',             'Sedang kerja', null),
+  ('content',     'Kalender konten November',           'Rencana posting 4 minggu.',                        'Terjadwal',    now() + interval '3 days'),
+  ('engineering', 'Migrasi database ke region Jakarta', 'Latensi lebih rendah untuk pengguna Indonesia.',   'Sedang kerja', null),
+  ('engineering', 'Optimasi pipeline CI',               'Build < 3 menit.',                                 'Selesai',      null)
 ) as v(agent_id, title, detail, status, due_at)
-where not exists (select 1 from public.ach_tasks);
+where not exists (select 1 from public.ach_tasks t where t.agent_id in ('chief','research','ops','content','engineering'));
 
-insert into public.ach_logs (agent_id, message, location)
-select v.agent_id, v.message, v.location
+insert into public.ach_logs (agent_id, message, location, created_at)
+select v.agent_id, v.message, v.location, now() - v.ago
 from (values
-  ('commander',   'membuka hari dengan briefing singkat', 'meeting'),
-  ('engineering', 'deploy hotfix sensor oksigen ✔',       'desk'),
-  ('finance',     'istirahat sebentar di Kantin',         'kantin'),
-  ('content',     'keluar ke Kubah Luar, main bareng alien', 'outdoor'),
-  ('research',    'mulai rapat di Meeting Room',          'meeting')
-) as v(agent_id, message, location)
-where not exists (select 1 from public.ach_logs);
+  ('chief',       'membuka hari dengan stand-up di kotatsu',       'meeting', interval '95 minutes'),
+  ('engineering', 'deploy patch keamanan ke server ✔',             'desk',    interval '80 minutes'),
+  ('content',     'menyeduh teh hijau di stasiun teh ☕',          'tea',     interval '41 minutes'),
+  ('research',    'balik ke Pojok Baca, lanjut riset pasar',       'desk',    interval '33 minutes'),
+  ('ops',         'memperbarui dashboard metrik di meja monitor',  'desk',    interval '12 minutes')
+) as v(agent_id, message, location, ago)
+where not exists (select 1 from public.ach_logs l where l.agent_id in ('chief','research','ops','content','engineering'));
 
 -- minta PostgREST memuat ulang cache skema
 notify pgrst, 'reload schema';

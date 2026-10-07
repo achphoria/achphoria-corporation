@@ -13,21 +13,21 @@
   function effective(a) {
     const age = a.updated_at ? Date.now() - Date.parse(a.updated_at) : Infinity;
     const stale = !(age < CFG.STALE_HOURS * 3600e3);
-    if (a.status === 'offline' && !stale) return { location: 'sleep', status: 'offline', activity: a.activity || 'Sedang offline', stale: false };
-    if (!a.location || stale) {
-      const s = ACH.scheduleFor(a.id);
-      return Object.assign(s, { stale: true });
+    if (stale || !a.location) {
+      if (!stale && a.status === 'offline') return { location: 'offline', status: 'offline', activity: a.activity || 'Sedang offline', stale: false };
+      return Object.assign(ACH.scheduleFor(a.id), { stale: true });
     }
-    const loc = ACH.ROOM_KEYS.includes(a.location) ? a.location : 'desk';
+    if (a.status === 'offline' || a.location === 'offline') return { location: 'offline', status: 'offline', activity: a.activity || 'Sedang offline', stale: false };
+    const loc = ACH.ROOM_KEYS.includes(a.location) ? a.location : 'desk'; // kunci tak dikenal → desk
     return { location: loc, status: ACH.STATUS[a.status] ? a.status : 'kerja', activity: a.activity || '', stale: false };
   }
   store.agentList = function () {
     const list = Object.values(store.agents);
     const seedIdx = (id) => { const p = ACH.PROFILE[id]; return p ? p.slot : 99; };
     list.sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || seedIdx(a.id) - seedIdx(b.id) || String(a.id).localeCompare(String(b.id)));
-    // slot modul: pakai sort_order 1..9 bila valid & unik, sisanya mengisi slot kosong berurutan
-    const used = new Array(9).fill(null), rest = [];
-    list.forEach((a) => { const so = a.sort_order; if (so >= 1 && so <= 9 && !used[so - 1]) used[so - 1] = a; else rest.push(a); });
+    // slot: pakai sort_order 1..MAX bila valid & unik, sisanya mengisi slot kosong berurutan
+    const MAX = ACH.MAX_AGENTS, used = new Array(MAX).fill(null), rest = [];
+    list.forEach((a) => { const so = a.sort_order; if (so >= 1 && so <= MAX && !used[so - 1]) used[so - 1] = a; else rest.push(a); });
     rest.forEach((a) => { const i = used.indexOf(null); if (i >= 0) used[i] = a; });
     const out = [];
     used.forEach((a, i) => { if (a) { a.slot = i; a.eff = effective(a); out.push(a); } });
@@ -37,48 +37,43 @@
   store.agentColor = (id) => (store.agents[id] ? store.agents[id].color : '#8a93a8');
   store.taskList = () => Object.values(store.tasks).sort((a, b) => Date.parse(b.updated_at || b.created_at || 0) - Date.parse(a.updated_at || a.created_at || 0));
 
-  function setMode(m, err) {
-    store.mode = m; store.error = err || null;
+  function setMode(m, err, short) {
+    store.mode = m; store.error = err || null; store.errorShort = short || null;
     store.emit('mode', m);
   }
   function emitAll() { store.emit('agents'); store.emit('tasks'); store.emit('logs'); }
 
   /* ---------------- DEMO ---------------- */
   const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+  // tenggat contoh: besok (WIB) pada jam kerja, mis. 10.00 / 14.00 / 16.00 WIB
+  const dueWib = (days, hour) => {
+    const d = new Date(Date.now() + 7 * 3600e3 + days * 86400e3).toISOString().slice(0, 10);
+    return new Date(d + 'T' + String(hour).padStart(2, '0') + ':00:00+07:00').toISOString();
+  };
   const SEED_STATE = {
-    commander: ['meeting', 'kerja', 'Memimpin rapat koordinasi mingguan', 'Sinkronisasi OKR Q4'],
-    engineering: ['desk', 'kerja', 'Deploy fitur realtime ke production', 'Migrasi server ke region baru'],
-    research: ['meeting', 'kerja', 'Presentasi insight data pengguna', 'Analisis retensi bulan ini'],
-    marketing: ['desk', 'kerja', 'Nyiapin kampanye peluncuran', 'Kampanye "Moon Week"'],
-    content: ['outdoor', 'santai', 'Rekam konten main bola bareng alien', 'Video behind-the-scenes base'],
-    sales: ['desk', 'kerja', 'Follow-up calon partner dari Bumi', 'Proposal kemitraan Lunar Logistics'],
-    finance: ['kantin', 'istirahat', 'Ngopi sambil cek cashflow', 'Rekap budget Q4'],
-    success: ['gym', 'santai', 'Angkat beban slow-motion (gravitasi 1/6!)', 'Balas tiket pelanggan prioritas'],
-    hr: ['desk', 'terjadwal', 'Review kontrak kerja sama', 'Update SOP keselamatan base'],
+    chief: ['meeting', 'kerja', 'Memimpin sinkronisasi prioritas minggu ini', 'Rencana prioritas Q4'],
+    research: ['desk', 'kerja', 'Membaca laporan riset pasar di pojok baca', 'Riset tren pasar Asia Tenggara'],
+    ops: ['meeting', 'terjadwal', 'Presentasi dashboard metrik di kotatsu', 'Dashboard metrik operasional'],
+    content: ['tea', 'istirahat', 'Seduh teh hijau sambil cari ide konten', 'Seri video "Sehari di Kantor"'],
+    engineering: ['desk', 'kerja', 'Memantau server & deploy patch keamanan', 'Migrasi database ke region Jakarta'],
   };
   const TASK_POOL = {
-    commander: ['Sinkronisasi OKR Q4', 'Siapkan agenda all-hands', 'Review laporan semua divisi', 'Rencana ekspansi modul baru'],
-    engineering: ['Migrasi server ke region baru', 'Perbaiki bug sensor oksigen', 'Optimasi pipeline CI', 'Upgrade firmware lift kaca'],
-    research: ['Analisis retensi bulan ini', 'Dashboard metrik alien-friendly', 'Riset tren pasar Q4', 'Survei kepuasan kru'],
-    marketing: ['Kampanye "Moon Week"', 'Jadwal konten media sosial', 'A/B test landing page', 'Brief kolaborasi influencer'],
-    content: ['Video behind-the-scenes base', 'Desain banner peluncuran', 'Podcast episode 12', 'Foto produk di kubah luar'],
-    sales: ['Proposal kemitraan Lunar Logistics', 'Follow-up 5 lead hangat', 'Demo produk untuk klien Mars', 'Negosiasi kontrak tahunan'],
-    finance: ['Rekap budget Q4', 'Rekonsiliasi invoice', 'Proyeksi cashflow 6 bulan', 'Audit pengeluaran oksigen'],
-    success: ['Balas tiket pelanggan prioritas', 'Onboarding klien baru', 'Update FAQ pusat bantuan', 'Telepon check-in pelanggan VIP'],
-    hr: ['Update SOP keselamatan base', 'Review kontrak kerja sama', 'Rekrutmen kru gelombang 3', 'Program wellness kru'],
+    chief: ['Rencana prioritas Q4', 'Agenda rapat mingguan', 'Review laporan semua divisi', 'Memo arah strategi untuk direksi'],
+    research: ['Riset tren pasar Asia Tenggara', 'Analisis kompetitor utama', 'Ringkasan 5 paper AI terbaru', 'Survei kepuasan pengguna'],
+    ops: ['Dashboard metrik operasional', 'Rekap data penjualan mingguan', 'Otomasi laporan harian', 'Audit kualitas data CRM'],
+    content: ['Seri video "Sehari di Kantor"', 'Kalender konten November', 'Caption & thumbnail minggu ini', 'Foto produk di pojok kamera'],
+    engineering: ['Migrasi database ke region Jakarta', 'Perbaiki bug sinkronisasi realtime', 'Optimasi pipeline CI', 'Hardening keamanan server'],
   };
+  const deskLabel = (id) => (ACH.PROFILE[id] ? ACH.PROFILE[id].homeLabel : 'meja');
   const EVENTS = [
-    { loc: 'desk', status: 'kerja', w: 34, act: (t) => 'Fokus mengerjakan: ' + t, log: (t) => 'balik ke meja, lanjut "' + t + '"' },
-    { loc: 'meeting', status: 'terjadwal', w: 9, act: () => 'Rapat koordinasi lintas divisi', log: () => 'mulai rapat di Meeting Room' },
-    { loc: 'kantin', status: 'istirahat', w: 9, act: () => 'Ngopi & ngemil di kantin', log: () => 'istirahat sebentar di Kantin' },
-    { loc: 'gym', status: 'santai', w: 6, act: () => 'Olahraga low-gravity di gym', log: () => 'olahraga dulu di Gym' },
-    { loc: 'arcade', status: 'santai', w: 6, act: () => 'Main game retro, cari high score', log: () => 'main game sebentar di Arcade' },
-    { loc: 'dance', status: 'santai', w: 5, act: () => 'Joget melayang di dance floor', log: () => 'turun ke Dance Floor' },
-    { loc: 'outdoor', status: 'santai', w: 7, act: () => 'Lempar bola bareng alien di kubah', log: () => 'keluar ke Kubah Luar, main bareng alien' },
-    { loc: 'sleep', status: 'istirahat', w: 4, act: () => 'Power nap 20 menit', log: () => 'power nap di Sleep Pod' },
-    { loc: 'shower', status: 'santai', w: 3, act: () => 'Mandi biar segar lagi', log: () => 'mandi dulu di Shower' },
-    { loc: 'command', status: 'kerja', w: 4, act: () => 'Pantau radar & komunikasi ke Bumi', log: () => 'naik ke Menara Komando' },
-    { loc: 'rocket', status: 'kerja', w: 3, act: () => 'Inspeksi roket logistik', log: () => 'cek roket di Landasan Roket' },
+    { loc: 'desk', status: 'kerja', w: 34, act: (t) => 'Fokus mengerjakan: ' + t, log: (t, id) => 'balik ke ' + deskLabel(id) + ', lanjut "' + t + '"' },
+    { loc: 'meeting', status: 'terjadwal', w: 10, act: () => 'Rapat lintas divisi di kotatsu', log: () => 'gabung rapat di kotatsu' },
+    { loc: 'tea', status: 'istirahat', w: 10, act: () => 'Seduh teh hijau di stasiun teh', log: () => 'menyeduh teh hijau di stasiun teh ☕' },
+    { loc: 'ramen', status: 'istirahat', w: 6, act: () => 'Makan ramen di konter', log: () => 'makan ramen dulu di konter 🍜' },
+    { loc: 'tatami', status: 'istirahat', w: 4, act: () => 'Power nap 20 menit di tatami', log: () => 'tidur siang sebentar di pojok tatami' },
+    { loc: 'vending', status: 'santai', w: 5, act: () => 'Beli minuman dingin', log: () => 'jajan minuman di vending machine' },
+    { loc: 'whiteboard', status: 'kerja', w: 7, act: (t) => 'Brainstorm di papan tulis: ' + t, log: () => 'corat-coret ide di papan tulis 💡' },
+    { loc: 'offline', status: 'offline', w: 2, act: () => 'Keluar sebentar', log: () => 'keluar lewat noren, offline sebentar' },
   ];
   let demoTimer = null, uid = 1;
   const uuid = () => 'demo-' + Date.now().toString(36) + '-' + (uid++);
@@ -92,14 +87,13 @@
       pool.forEach((title, k) => {
         const status = k === 0 ? 'Sedang kerja' : k === 1 || k === 2 ? 'Terjadwal' : 'Selesai';
         const id = uuid();
-        store.tasks[id] = { id, agent_id: a.id, title, detail: 'Tugas divisi ' + a.division + '.', status, due_at: status === 'Terjadwal' ? new Date(Date.now() + (k + 1) * 3 * 3600e3).toISOString() : null, created_at: iso((k + 1) * 3600e3), updated_at: iso(k * 900e3 + Math.random() * 600e3) };
+        store.tasks[id] = { id, agent_id: a.id, title, detail: 'Tugas divisi ' + a.division + '.', status, due_at: status === 'Terjadwal' ? dueWib(k, [10, 14, 16][(i + k) % 3]) : null, created_at: iso((k + 1) * 3600e3), updated_at: iso(k * 900e3 + Math.random() * 600e3) };
       });
     });
     const intro = [
-      ['commander', 'membuka hari dengan briefing singkat', 'meeting', 110], ['engineering', 'deploy hotfix sensor oksigen ✔', 'desk', 95],
-      ['finance', 'istirahat sebentar di Kantin', 'kantin', 70], ['success', 'olahraga dulu di Gym', 'gym', 52],
-      ['content', 'keluar ke Kubah Luar, main bareng alien', 'outdoor', 40], ['research', 'mulai rapat di Meeting Room', 'meeting', 25],
-      ['commander', 'mulai rapat di Meeting Room', 'meeting', 24], ['sales', 'kirim proposal ke Lunar Logistics', 'desk', 12], ['hr', 'menjadwalkan review kontrak jam 17.00', 'desk', 6],
+      ['chief', 'membuka hari dengan stand-up di kotatsu', 'meeting', 95], ['engineering', 'deploy patch keamanan ke server ✔', 'desk', 80],
+      ['content', 'menyeduh teh hijau di stasiun teh ☕', 'tea', 41], ['research', 'balik ke Pojok Baca, lanjut "Riset tren pasar Asia Tenggara"', 'desk', 33],
+      ['ops', 'gabung rapat di kotatsu', 'meeting', 18], ['chief', 'gabung rapat di kotatsu', 'meeting', 17], ['engineering', 'menjadwalkan migrasi database jam 21.00', 'desk', 6],
     ];
     intro.forEach(([aid, msg, loc, minAgo], i) => store.logs.push({ id: 'd' + i, agent_id: aid, message: msg, location: loc, created_at: iso(minAgo * 60e3) }));
     store.logs.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -132,12 +126,12 @@
       if (Math.random() < 0.3) {
         const pool = TASK_POOL[a.id] || ['Tugas baru'];
         const id = uuid();
-        store.tasks[id] = { id, agent_id: a.id, title: pool[Math.floor(Math.random() * pool.length)] + ' #' + (2 + Math.floor(Math.random() * 8)), detail: 'Dijadwalkan otomatis (demo).', status: 'Terjadwal', due_at: new Date(Date.now() + (2 + Math.random() * 20) * 3600e3).toISOString(), created_at: now, updated_at: now };
+        store.tasks[id] = { id, agent_id: a.id, title: pool[Math.floor(Math.random() * pool.length)] + ' #' + (2 + Math.floor(Math.random() * 8)), detail: 'Dijadwalkan otomatis (demo).', status: 'Terjadwal', due_at: dueWib(1 + Math.floor(Math.random() * 3), 9 + Math.floor(Math.random() * 8)), created_at: now, updated_at: now };
       }
     }
     const task = working ? working.title : a.current_task;
     Object.assign(a, { location: ev.loc, status: ev.status, activity: ev.act(task), current_task: task, updated_at: now });
-    pushLog(a.id, ev.log(task), ev.loc);
+    pushLog(a.id, ev.log(task, a.id), ev.loc);
     // bersihkan tugas selesai yang terlalu banyak
     const done = Object.values(store.tasks).filter((t) => t.status === 'Selesai').sort((x, y) => Date.parse(x.updated_at) - Date.parse(y.updated_at));
     while (done.length > 14) delete store.tasks[done.shift().id];
@@ -151,17 +145,28 @@
   }
   function scheduleDemo() {
     clearTimeout(demoTimer);
-    demoTimer = setTimeout(() => { if (store.mode === 'demo') { demoTick(); scheduleDemo(); } }, 20000 + Math.random() * 20000);
+    demoTimer = setTimeout(() => { if (store.mode === 'demo' && !store.demoPaused) { demoTick(); scheduleDemo(); } }, 12000 + Math.random() * 14000);
   }
-  function startDemo(err) {
+  function startDemo(err, short) {
     if (store.mode !== 'demo') {
       seedDemo();
-      setMode('demo', err);
+      setMode('demo', err, short);
       emitAll();
       scheduleDemo();
-    }
+    } else if (err !== store.error) setMode('demo', err, short); // perbarui alasan di badge
   }
   store.demoTick = demoTick; // dipakai untuk uji
+  store.demoPause = () => { clearTimeout(demoTimer); store.demoPaused = true; };
+  // dipakai untuk uji/screenshot: pindahkan agen demo ke ruangan tertentu
+  store.demoMove = function (id, loc, status, act) {
+    const a = store.agents[id];
+    if (!a || store.mode !== 'demo') return false;
+    const ev = EVENTS.find((e) => e.loc === loc) || EVENTS[0];
+    Object.assign(a, { location: loc, status: status || ev.status, activity: act || ev.act(a.current_task), updated_at: new Date().toISOString() });
+    pushLog(id, ev.log(a.current_task, id), loc);
+    store.emit('agents');
+    return true;
+  };
 
   /* ---------------- LIVE (Supabase) ---------------- */
   let client = null, channel = null, retryTimer = null, pollTimer = null, failCount = 0;
@@ -169,17 +174,27 @@
     const u = CFG.SUPABASE_URL || '', k = CFG.SUPABASE_ANON_KEY || '';
     return /^https:\/\/.+/.test(u) && k.length > 20 && !/YOUR|GANTI|xxxx/i.test(u + k);
   };
+  const tagged = (msg, short) => Object.assign(new Error(msg), { short });
+  // situs v2 butuh 5 agen baru; data v1 (9 agen markas bulan) → tetap DEMO sampai migrasi dijalankan
+  function checkV2(rows) {
+    const ids = new Set(rows.map((r) => r.id));
+    const old = ACH.V1_IDS.filter((id) => ids.has(id));
+    const missing = ACH.V2_IDS.filter((id) => !ids.has(id));
+    if (old.length) throw tagged('Database masih versi lama (agen v1: ' + old.join(', ') + ') — jalankan supabase/migrate-v2-kantor.sql di SQL Editor', 'DB v1');
+    if (missing.length) throw tagged('Agen v2 belum lengkap di ' + T_AGENTS + ' (kurang: ' + missing.join(', ') + ') — jalankan supabase/migrate-v2-kantor.sql', 'agen kurang');
+  }
   async function fetchAll() {
     // cek tabel agen dulu (1 request) supaya tidak membanjiri console bila skema belum dijalankan
     const a = await client.from(T_AGENTS).select('*');
-    if (a.error) throw new Error(a.error.message || a.error.code || 'Query gagal');
+    if (a.error) throw tagged(a.error.message || a.error.code || 'Query gagal', /does not exist|schema cache|not find/i.test(a.error.message || '') ? 'tabel belum ada' : 'gagal query');
+    if (!a.data || !a.data.length) throw tagged('Tabel ' + T_AGENTS + ' masih kosong — jalankan supabase/schema.sql', 'tabel kosong');
+    checkV2(a.data);
     const [t, l] = await Promise.all([
       client.from(T_TASKS).select('*').order('updated_at', { ascending: false }).limit(300),
       client.from(T_LOGS).select('*').order('created_at', { ascending: false }).limit(150),
     ]);
     const err = t.error || l.error;
     if (err) throw new Error(err.message || err.code || 'Query gagal');
-    if (!a.data || !a.data.length) throw new Error('Tabel ' + T_AGENTS + ' masih kosong');
     return { agents: a.data, tasks: t.data || [], logs: l.data || [] };
   }
   function applyAll(d) {
@@ -221,7 +236,7 @@
       pollTimer = setInterval(poll, CFG.POLL_SECONDS * 1000);
     } catch (e) {
       console.warn('[ACHPHORIA] Supabase belum siap → mode DEMO:', e.message || e);
-      startDemo(e.message || String(e));
+      startDemo(e.message || String(e), e.short || 'offline');
       retryTimer = setTimeout(tryLive, CFG.RETRY_SECONDS * 1000);
     }
   }
@@ -232,18 +247,18 @@
       if (++failCount >= 2) {
         clearInterval(pollTimer);
         if (channel) { client.removeChannel(channel); channel = null; }
-        store.mode = 'x'; startDemo(e.message); retryTimer = setTimeout(tryLive, CFG.RETRY_SECONDS * 1000);
+        store.mode = 'x'; startDemo(e.message, e.short || 'putus'); retryTimer = setTimeout(tryLive, CFG.RETRY_SECONDS * 1000);
       }
     }
   }
 
   store.start = function () {
     const forceDemo = /[?&]demo=1/.test(location.search);
-    if (forceDemo) return startDemo('Mode demo dipaksa lewat ?demo=1');
-    if (!configured()) return startDemo('config.js belum diisi');
-    if (!window.supabase || !window.supabase.createClient) return startDemo('Library Supabase gagal dimuat');
+    if (forceDemo) return startDemo('Mode demo dipaksa lewat ?demo=1', '?demo=1');
+    if (!configured()) return startDemo('config.js belum diisi', 'tanpa config');
+    if (!window.supabase || !window.supabase.createClient) return startDemo('Library Supabase gagal dimuat', 'lib gagal');
     // tampilkan demo dulu supaya langsung hidup, lalu coba LIVE
-    startDemo('Menghubungkan ke Supabase…');
+    startDemo('Menghubungkan ke Supabase…', 'menghubungkan');
     tryLive();
   };
   // evaluasi ulang jadwal tiap menit
