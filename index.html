@@ -13,38 +13,55 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <canvas id="scene" aria-label="Kantor ACHPHORIA bergaya Jepang"></canvas>
-
-  <header id="logo" class="washi" aria-label="ACHPHORIA CORPORATION">
-    <div class="hanko" title="達成 — pencapaian" aria-hidden="true"><span>達</span><span>成</span></div>
-    <div class="wm">
-      <h1>ACHPHORIA</h1>
-      <div class="wm-sub"><span>CORPORATION</span></div>
+  <header id="topbar" class="topbar">
+    <div id="logo" class="brand" aria-label="ACHPHORIA CORPORATION">
+      <div class="hanko" title="達成 — pencapaian" aria-hidden="true"><span>達</span><span>成</span></div>
+      <div class="wm">
+        <h1>ACHPHORIA</h1>
+        <div class="wm-sub"><span>CORPORATION</span></div>
+      </div>
+    </div>
+    <div id="sumBar" class="sumbar" aria-live="polite"></div>
+    <div id="hud" class="hud">
+      <div class="clockbox">
+        <div class="clock"><span id="clock">--.--</span><span id="sec" class="sec2">--</span><small>WIB</small></div>
+        <div id="date" class="date">—</div>
+      </div>
+      <button id="badge" class="badge demo" title=""><i></i>DEMO</button>
     </div>
   </header>
 
-  <div id="hud" class="hud washi">
-    <div class="clock"><span id="clock">--.--</span><span id="sec" class="sec2">--</span><small>WIB</small></div>
-    <div id="date" class="date">—</div>
-    <button id="badge" class="badge demo" title=""><i></i>DEMO</button>
-  </div>
+  <main id="stage" class="stage">
+    <canvas id="scene" aria-label="Kantor ACHPHORIA bergaya Jepang"></canvas>
+    <nav id="toolbar" class="dock" aria-label="Kontrol">
+      <button data-act="board" title="Papan Tugas (T)"><b>📋</b><span class="lbl">Papan Tugas</span><kbd>T</kbd></button>
+      <button data-act="log" title="Log aktivitas (L)"><b>📜</b><span class="lbl">Log</span><kbd>L</kbd></button>
+      <button data-act="roster" title="Tim (K)"><b>👥</b><span class="lbl">Tim</span><kbd>K</kbd></button>
+      <button data-act="home" title="Overview (0)"><b>🏠</b><span class="lbl">Overview</span><kbd>0</kbd></button>
+    </nav>
+    <div id="hint" class="hint">Klik maskot untuk ikuti · Scroll zoom · Seret geser · <kbd>Esc</kbd> kembali</div>
+  </main>
 
-  <nav id="toolbar" class="toolbar" aria-label="Kontrol">
-    <button data-act="board"><b>📋</b> Papan Tugas <kbd>T</kbd></button>
-    <button data-act="log"><b>📜</b> Log <kbd>L</kbd></button>
-    <button data-act="roster"><b>👥</b> Tim <kbd>K</kbd></button>
-    <button data-act="home"><b>🏠</b> Overview <kbd>0</kbd></button>
-  </nav>
-  <div id="hint" class="hint">Klik maskot untuk ikuti · Scroll untuk zoom · Seret untuk geser · <kbd>Esc</kbd> kembali</div>
+  <aside id="sidebar" class="sidebar" aria-label="Dasbor">
+    <button id="sheetHandle" class="sheet-handle" aria-label="Buka/tutup dasbor"><i></i></button>
+    <div id="sumBarM" class="sumbar sumbar-m"></div>
+    <section class="sb-sec">
+      <div class="sb-h"><h2>Tim</h2><small id="teamMeta"></small></div>
+      <div id="agentCards" class="acards"></div>
+    </section>
+    <section class="sb-sec">
+      <div class="sb-h"><h2>Ringkasan hari ini</h2><small id="sumDate"></small></div>
+      <div id="todaySum" class="today"></div>
+    </section>
+    <section class="sb-sec sb-feed">
+      <div class="sb-h"><h2>Log langsung <span class="live-dot"></span></h2><button class="link" id="feedAll">Semua <kbd>L</kbd></button></div>
+      <div id="feed" class="feed"></div>
+    </section>
+  </aside>
 
   <aside id="roster" class="panel washi side-left" hidden>
     <div class="ph"><h2>Tim ACHPHORIA</h2><button class="x" data-close="roster" aria-label="Tutup">✕</button></div>
     <div id="rosterList" class="plist"></div>
-  </aside>
-
-  <aside id="detail" class="panel washi side-left" hidden>
-    <div class="ph"><h2 id="dTitle">Agen</h2><button class="x" data-close="detail" aria-label="Tutup">✕</button></div>
-    <div id="detailBody" class="pbody"></div>
   </aside>
 
   <aside id="logPanel" class="panel washi side-right" hidden>

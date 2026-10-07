@@ -146,7 +146,8 @@
         ctx.beginPath(); ctx.arc(x, y, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore();
       };
       if (g.pose === 'lie') {
-        shadow(g.x, g.y - 2, g.dh * 0.58, g.dw * 0.2, 0.42);
+        shadow(g.x, g.y - 2, g.dh * 0.62, g.dw * 0.22, 0.5);
+        shadow(g.x, g.y - 3, g.dh * 0.4, g.dw * 0.1, 0.35);
         // bantal kecil indigo di bawah kepala
         const dir = this.spot.face || 1, px = g.x - dir * g.dh * 0.36, pw = g.dw * 0.62, phh = g.dw * 0.3;
         ctx.save();
@@ -156,17 +157,28 @@
         ctx.ellipse(px, g.y - phh * 0.45, pw / 2, phh / 2, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.beginPath(); ctx.ellipse(px - pw * 0.08, g.y - phh * 0.62, pw * 0.3, phh * 0.16, 0, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
-        const img = m.standC;
+        const img = ACH.fx.lit(this.id + ':lie', m.standC, g.x, g.y, 1);
         ctx.translate(g.x, g.y - g.dw * 0.38);
         ctx.scale(1, 0.86); // sedikit pipih mengikuti perspektif lantai
         ctx.rotate((this.spot.face || 1) * -Math.PI / 2);
         ctx.scale(g.sy, 1);
         ctx.drawImage(img, -g.dw / 2, -g.dh / 2, g.dw, g.dh);
       } else {
-        if (g.pose === 'stool') shadow(g.x, g.y - g.lift + 3, g.dw * 0.34, g.dw * 0.08, 0.25);
-        else if (g.pose === 'sit') shadow(g.x, g.y - g.lift + 2, g.dw * 0.52, g.dw * 0.14, 0.5);
-        else shadow(g.x, g.y, g.dw * 0.4 * (1 - g.hop / (g.H * 0.3)), g.dw * 0.13, 0.45);
-        const img = g.pose === 'sit' || g.pose === 'stool' ? (closed ? m.sitC : m.sit) : (closed ? m.standC : m.stand);
+        // bayangan kontak: lapisan lebar lembut + inti gelap tepat di bawah
+        if (g.pose === 'stool') {
+          shadow(g.x, g.y - g.lift + 3, g.dw * 0.38, g.dw * 0.1, 0.34);
+          shadow(g.x, g.y, g.dw * 0.42, g.dw * 0.12, 0.28); // bayangan bangku+badan di lantai
+        } else if (g.pose === 'sit') {
+          shadow(g.x, g.y - g.lift + 2, g.dw * 0.58, g.dw * 0.17, 0.55);
+          shadow(g.x, g.y - g.lift + 1, g.dw * 0.36, g.dw * 0.08, 0.4);
+        } else {
+          const k = 1 - g.hop / (g.H * 0.3);
+          shadow(g.x, g.y, g.dw * 0.5 * k, g.dw * 0.16 * k, 0.5);
+          shadow(g.x, g.y, g.dw * 0.28 * k, g.dw * 0.075 * k, 0.42 * k);
+        }
+        const sitting = g.pose === 'sit' || g.pose === 'stool';
+        const raw = sitting ? (closed ? m.sitC : m.sit) : (closed ? m.standC : m.stand);
+        const img = ACH.fx.lit(this.id + (sitting ? ':sit' : ':std'), raw, g.x, g.y - g.lift, this.face);
         ctx.translate(g.x + g.jx, g.y - g.lift - g.hop);
         ctx.rotate(g.tilt);
         ctx.scale(this.face * g.sx, g.sy);

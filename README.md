@@ -5,10 +5,13 @@ Kantor virtual **LIVE** untuk ACHPHORIA CORPORATION: sebuah kantor mungil bergay
 ![Overview kantor ACHPHORIA](assets/preview.webp)
 
 - **Latar:** satu ilustrasi diorama clay (dinding pasir, kayu ash, tekstil indigo, tanaman sage, bantal terakota, cahaya amber). Isinya: pojok baca dengan jendela shoji, rak buku, taman zen dan bonsai; meja multi-monitor; kotatsu dengan 5 bantal duduk; booth server berkaca; corkboard, kamera tripod, dan rak tanaman; stasiun teh dengan kyusu beruap plus konter ramen 3 bangku; pintu noren; vending machine; papan tulis; lampion; dan monstera.
-- **Karakter:** sprite maskot clay di atas latar. Ukurannya mengikuti perspektif (makin depan makin besar), urutan gambarnya diatur menurut kedalaman (y), ada bayangan kontak, dan bagian depan kotatsu ikut menutupi agen yang duduk di belakangnya.
-- **Animasi:** jalan melompat dengan *squash & stretch*, napas pelan saat diam, kedip mata, getar mengetik di meja, duduk di bantal atau bangku, tidur berbaring dengan "z", serta gelembung emote 💬 ☕ 🍜 💡 🥤.
-- **Suasana:** lampion bergoyang dan berkerlip, uap dari kyusu, kedip monitor dan LED server, vending machine berpendar, debu melayang di cahaya jendela, dan tint siang/sore/malam yang mengikuti jam WIB.
-- **UI (Bahasa Indonesia, jam WIB):** panel kertas washi, aksen indigo, tombol clay, wordmark ACHPHORIA dengan stempel hanko merah 達成 ("pencapaian"). Tersedia Papan Tugas (`T`), Log (`L`), daftar Tim (`K`), kartu detail agen, tooltip, dan badge **LIVE/DEMO**.
+- **Karakter:** sprite maskot clay di atas latar. Ukurannya mengikuti perspektif (makin depan makin besar), urutan gambarnya diatur menurut kedalaman (y), ada bayangan kontak lembut berlapis, dan bagian depan kotatsu ikut menutupi agen yang duduk di belakangnya. Sprite "diterangi" ulang tiap frame: warna & terang mengikuti cahaya lokal di latar (diambil dari peta cahaya kecil gambar latar), dihangatkan sesuai jam (siang / senja / malam), oklusi lembut di bagian bawah, dan *rim light* hangat dari lampion saat malam (dari jendela saat senja). Maskot dicerminkan saat berjalan ke kiri.
+- **Animasi:** jalan melompat dengan *squash & stretch*, napas pelan saat diam, kedip mata, getar mengetik di meja, duduk di bantal atau bangku, tidur berbaring dengan "z", serta emote 💬 ☕ 🍜 💡 🥤 yang memantul di label agen.
+- **Suasana yang bereaksi pada data:** 3 monitor menyala lebih terang (dengan baris data bergulir) saat Ops & Data bekerja di mejanya, LED rak server berkedip lebih cepat saat Engineering bekerja, uap kyusu menebal saat ada yang di stasiun teh, mangkuk di konter mengepul saat ada yang makan ramen, dan kertas **"HARI INI · 本日"** di papan tulis (digambar mengikuti perspektif dinding) menampilkan jumlah tugas *sedang kerja* dan *selesai hari ini*. Ditambah lampion bergoyang/berkerlip (badan lampion menyala saat malam), vending berpendar, debu di cahaya jendela, dan tint siang/senja/malam menurut jam WIB.
+- **Tata letak (v3):** *top bar* ramping (wordmark + hanko 達成 di kiri, ringkasan tim seperti "3 kerja · 1 meeting · 1 istirahat" di tengah, jam WIB + tanggal + badge **LIVE/DEMO** di kanan), panggung kantor yang **selalu memenuhi ruang** (cover-fit: tepi dipotong, tidak pernah ada bar kosong; geser & zoom dibatasi supaya tidak ada area kosong), dan **sidebar dasbor** kertas washi di kanan (≈330–384 px). Di HP sidebar menjadi *bottom sheet* yang bisa ditarik/ketuk untuk dibesarkan.
+- **Sidebar dasbor:** (a) 5 kartu agen — avatar maskot, nama divisi, pill status berwarna (Kerja / Meeting / Istirahat / Santai / Terjadwal / Offline), lokasi, aktivitas + tugas satu baris, "update 4 mnt lalu"; klik kartu = zoom & ikuti agen, kartu agen yang diikuti disorot dan **membuka detail** (tugas, log terbaru, tombol tutup) menggantikan kartu detail melayang lama; (b) **Ringkasan hari ini**: Sedang kerja / Terjadwal / Selesai hari ini + bar progres; (c) **Log langsung**: 8 entri terbaru, entri baru masuk dengan animasi.
+- **Label di panggung:** tiap maskot punya label nama + gelembung aktivitas singkat (emoji + 2–4 kata, mis. "📊 pantau data", "🍵 istirahat teh", "💬 meeting", "🚶 menuju kotatsu"). Label digambar tajam di ruang layar dan didorong agar tidak saling tumpuk saat agen berkumpul (dengan garis penunjuk bila bergeser jauh).
+- **UI (Bahasa Indonesia, jam WIB):** kertas washi, aksen indigo, tombol clay. Papan Tugas (`T`), Log lengkap (`L`), daftar Tim (`K`), tooltip, badge LIVE/DEMO (klik untuk alasan).
 
 ## Agen (v2)
 
@@ -26,12 +29,12 @@ Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdas
 
 | Fitur | Cara pakai |
 |---|---|
-| Ikuti agen | Klik maskot (atau item di daftar Tim / Log / Papan Tugas, atau tombol `1`–`5`). Kamera zoom lalu mengikuti agen, dan kartu detail terbuka. |
-| Kembali ke overview | `Esc`, klik area kosong, tombol ✕, atau `0` |
+| Ikuti agen | Klik maskot, kartu agen di sidebar, item log / Papan Tugas / daftar Tim, atau tombol `1`–`5`. Kamera zoom lalu mengikuti agen, dan kartunya di sidebar membuka detail. |
+| Kembali ke overview | `Esc`, klik area kosong, tombol ✕ Tutup di kartu, klik kartu yang sama, atau `0` |
 | Zoom & geser | Scroll untuk zoom di sekitar kursor, seret untuk menggeser. Saat mengikuti agen, scroll mengatur level zoom. |
 | Papan Tugas | `T`. Tiga kolom: **Sedang kerja · Terjadwal · Selesai** |
-| Log aktivitas | `L`. Entri baru muncul dengan animasi, waktu dalam WIB |
-| Tim | `K`. Lima agen beserta status, lokasi, dan aktivitasnya |
+| Log aktivitas | 8 terbaru selalu di sidebar; `L` / "Semua" membuka log lengkap. Entri baru muncul dengan animasi, waktu dalam WIB |
+| Tim | Selalu terlihat di sidebar; `K` membuka daftar Tim versi besar (dengan nomor tombol) |
 | Tooltip | Arahkan kursor ke maskot atau fasilitas (kotatsu, stasiun teh, vending, …) |
 | Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan peta lantai, graf jalan, dan titik-titik bernama |
 
@@ -41,16 +44,18 @@ Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdas
 index.html                    halaman utama
 config.js                     URL + publishable key Supabase (AMAN untuk publik)
 css/style.css                 gaya UI (washi, indigo, tombol clay)
-assets/                       latar 2560×1440 + versi kecil, potongan depan kotatsu,
+assets/                       latar 2560×1440, potongan depan kotatsu, preview README,
                               3 lampion, 5 maskot (+ varian mata tertutup), favicon (± 0,7 MB)
 js/util.js                    utilitas, format waktu WIB
 js/profiles.js                5 agen, kunci ruangan, status, jadwal fallback WIB
 js/assets.js                  pemuat gambar + pose duduk yang dibuat di kode
 js/world.js                   peta lantai, graf waypoint, titik bernama, area tooltip, skala perspektif
 js/sim.js                     simulasi agen: rute, reservasi kursi, pose, squash & stretch, emote
-js/fx.js                      suasana: lampion, uap, monitor, LED server, vending, debu, tint siang/malam
+js/fx.js                      suasana & cahaya: lampion, uap teh/ramen, monitor & LED yang bereaksi pada data,
+                              papan "Hari ini", pencahayaan sprite (cahaya lokal + rim light), tint siang/malam
 js/data.js                    Supabase LIVE + fallback DEMO (+ deteksi database v1)
-js/app.js                     loop render, kamera, input, panel UI
+js/app.js                     loop render, kamera cover-fit, label + gelembung aktivitas, top bar,
+                              sidebar dasbor (kartu agen, ringkasan, log langsung), panel T/L/K
 supabase/schema.sql           skema LENGKAP v2 untuk instalasi baru (idempotent, prefix ach_)
 supabase/migrate-v2-kantor.sql migrasi database v1 (markas bulan, 9 agen) → v2
 tools/report.mjs              CLI laporan (Node 18+, tanpa dependensi)
@@ -132,7 +137,7 @@ Kunci yang tidak dikenal dianggap `desk`. Agen dengan status `offline` selalu be
 
 ### Jadwal fallback (WIB)
 
-Jadwal ini dipakai kalau `location` kosong (NULL) atau data agen **basi** (`updated_at` lebih tua dari `STALE_HOURS`, default 3 jam). Kartu detail lalu menampilkan label *jadwal otomatis*. Variasi "giliran" ditentukan per agen per hari secara deterministik, jadi semua pengunjung melihat hal yang sama.
+Jadwal ini dipakai kalau `location` kosong (NULL) atau data agen **basi** (`updated_at` lebih tua dari `STALE_HOURS`, default 3 jam). Kartu agen di sidebar lalu menampilkan label *jadwal otomatis*. Variasi "giliran" ditentukan per agen per hari secara deterministik, jadi semua pengunjung melihat hal yang sama.
 
 | Jam WIB (Senin–Jumat) | Lokasi |
 |---|---|

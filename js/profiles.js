@@ -40,6 +40,64 @@
   };
   ACH.TASK_COLS = ['Sedang kerja', 'Terjadwal', 'Selesai'];
 
+  // Status tampilan (kartu, pill, ringkasan header): rapat di kotatsu = "Meeting"
+  const MEETING = { key: 'meeting', label: 'Meeting', color: '#5566a8' };
+  ACH.dispStatus = function (eff) {
+    if (!eff) return Object.assign({ key: 'kerja' }, ACH.STATUS.kerja);
+    if (eff.status === 'offline' || eff.location === 'offline') return Object.assign({ key: 'offline' }, ACH.STATUS.offline);
+    if (eff.location === 'meeting') return MEETING;
+    const k = ACH.STATUS[eff.status] ? eff.status : 'kerja';
+    return Object.assign({ key: k }, ACH.STATUS[k]);
+  };
+  ACH.DISP_ORDER = ['kerja', 'meeting', 'terjadwal', 'istirahat', 'santai', 'offline'];
+
+  /* Gelembung aktivitas singkat (emoji + 2–4 kata) di atas tiap maskot */
+  const DESK_ACT = {
+    chief: ['📜', 'susun rencana'],
+    research: ['📚', 'baca riset'],
+    ops: ['📊', 'pantau data'],
+    content: ['📸', 'bikin konten'],
+    engineering: ['🛠️', 'cek server'],
+  };
+  const ROOM_ACT = {
+    meeting: ['💬', 'meeting'],
+    tea: ['🍵', 'istirahat teh'],
+    ramen: ['🍜', 'makan ramen'],
+    tatami: ['😴', 'tidur siang'],
+    vending: ['🥤', 'jajan minuman'],
+    whiteboard: ['💡', 'brainstorm'],
+    offline: ['👋', 'offline'],
+  };
+  const ROOM_TO = { desk: 'meja', meeting: 'kotatsu', tea: 'stasiun teh', ramen: 'konter ramen', tatami: 'tatami', vending: 'vending', whiteboard: 'papan tulis', offline: 'pintu' };
+  const KEYWORDS = [
+    [/baca|membaca|riset|paper|survei/i, '📚', 'baca riset'],
+    [/deploy|rilis|patch/i, '🚀', 'deploy patch'],
+    [/rekap|laporan|report/i, '📊', 'rekap data'],
+    [/inbox|email/i, '📥', 'cek inbox'],
+    [/lembur/i, '🌙', 'lembur sebentar'],
+    [/stand-?up|rapat|meeting/i, '💬', 'rapat singkat'],
+    [/foto|video|kamera|konten|caption/i, '📸', 'bikin konten'],
+    [/bug|debug|perbaik/i, '🐞', 'buru bug'],
+    [/server|monitor|pantau/i, null, null],
+  ];
+  ACH.activityShort = function (id, eff, opts) {
+    eff = eff || {};
+    if (opts && opts.walking && opts.room) return ['🚶', 'menuju ' + (ROOM_TO[opts.room] || opts.room)];
+    const loc = eff.location;
+    if (loc === 'offline' || eff.status === 'offline') {
+      if (/libur/i.test(eff.activity || '')) return ['🏖️', 'libur'];
+      if (/pulang/i.test(eff.activity || '')) return ['🌙', 'sudah pulang'];
+      if (/belum masuk/i.test(eff.activity || '')) return ['🌅', 'belum masuk'];
+      return ROOM_ACT.offline;
+    }
+    if (loc && loc !== 'desk' && ROOM_ACT[loc]) return ROOM_ACT[loc];
+    if (eff.status === 'istirahat' || eff.status === 'santai') return ['☕', 'santai sejenak'];
+    const base = DESK_ACT[id] || ['💻', 'fokus kerja'];
+    for (const [re, e, t] of KEYWORDS) if (re.test(eff.activity || '')) return e ? [e, t] : base;
+    if (eff.status === 'terjadwal') return ['🗓️', 'siapkan agenda'];
+    return base;
+  };
+
   /* ------------------------------------------------------------------
      Jadwal fallback harian (WIB) — dipakai bila lokasi agen kosong atau
      update terakhir lebih tua dari STALE_HOURS. Variasi per hari & agen

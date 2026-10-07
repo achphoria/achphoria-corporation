@@ -4,7 +4,8 @@
   const ACH = window.ACH;
 
   // Tinggi maskot berdiri (px dunia) sesuai kedalaman y — perspektif ringan
-  const scaleAt = (y) => 104 * (0.74 + 0.3 * ACH.clamp((y - 300) / 370, -0.2, 1.15));
+  // v3: ±22% lebih besar dari v2 supaya maskot terbaca jelas tanpa zoom (tetap proporsional dgn perabot)
+  const scaleAt = (y) => 127 * (0.74 + 0.3 * ACH.clamp((y - 300) / 370, -0.2, 1.15));
 
   // Lantai yang bisa dilalui (untuk debug overlay & dokumentasi)
   const FLOOR = [
