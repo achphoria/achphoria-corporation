@@ -1117,7 +1117,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         return { ok: true, count: rows.length, rows };
       }
       default:
-        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, typing, inbox, claim, done, fail, report, task, log, chats, ping');
+        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, send_photo, send_file, typing, inbox, claim, done, fail, report, task, log, chats, ping');
     }
   }
 
