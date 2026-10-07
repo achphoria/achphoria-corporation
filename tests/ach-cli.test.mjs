@@ -71,6 +71,35 @@ test('inbox/claim/done/fail/chats/ping/typing', () => {
   assert.throws(() => build(['hapus', '--bot', 'chief']), UsageError);
 });
 
+test('v4: task / claim|done|fail --task / log / report --task-event --task-note', () => {
+  assert.deepEqual(build(['task', 'new', '--bot', 'research', '--title', 'Tes grup log']), { action: 'task', bot: 'research', event: 'new', title: 'Tes grup log' });
+  assert.deepEqual(build(['task', 'new', '--bot', 'chief', '--agent', 'content', '--title', 'Kalender', '--note', 'minggu depan']),
+    { action: 'task', bot: 'chief', event: 'new', title: 'Kalender', agent: 'content', note: 'minggu depan' });
+  assert.deepEqual(build(['task', 'approval', '--bot', 'content', '--task-id', '1a2b3c4d', '--note', 'draf siap']),
+    { action: 'task', bot: 'content', event: 'approval', task_id: '1a2b3c4d', note: 'draf siap' });
+  assert.deepEqual(build(['claim', '12', '--bot', 'research', '--task', 'Tes grup log', '--note', 'mulai']),
+    { action: 'task', bot: 'research', event: 'start', title: 'Tes grup log', note: 'mulai', inbox_id: 12 });
+  assert.deepEqual(build(['done', '--bot', 'research', '--task', 'Tes grup log', '--note', 'beres']),
+    { action: 'task', bot: 'research', event: 'done', title: 'Tes grup log', note: 'beres' });
+  assert.deepEqual(build(['fail', '--task-id', 'abcd1234', '--note', 'butuh akses'], { ACH_BOT: 'ops' }),
+    { action: 'task', bot: 'ops', event: 'fail', task_id: 'abcd1234', note: 'butuh akses' });
+  assert.deepEqual(build(['log', '--bot', 'ops', '--text', 'dashboard diperbarui', '--task', 'Rekap']), { action: 'log', bot: 'ops', text: 'dashboard diperbarui', task: 'Rekap' });
+  assert.deepEqual(build(['log', '--bot', 'ops', 'halo', 'semua']), { action: 'log', bot: 'ops', text: 'halo semua' });
+  assert.deepEqual(build(['report', '--bot', 'research', '--task', 'A', '--task-event', 'gagal', '--task-note', 'sumber down']),
+    { action: 'report', bot: 'research', task_event: 'gagal', task: 'A', task_note: 'sumber down' });
+  assert.deepEqual(build(['report', '--bot', 'research', '--task-id', '1a2b3c4d', '--task-status', 'Selesai']),
+    { action: 'report', bot: 'research', task_status: 'Selesai', task_id: '1a2b3c4d' });
+  const bad = [
+    ['task', 'hapus', '--bot', 'ops', '--title', 'x'], ['task', 'new', '--bot', 'ops'], ['task', 'new', '--bot', 'ops', '--task-id', 'abcd'],
+    ['task', 'start', '--bot', 'ops', '--title', 'x', '--agent', 'research'], ['task', 'new', '--bot', 'chief', '--title', 'x', '--agent', 'hr'],
+    ['claim', '--bot', 'ops', '--task', 'x', '--note', 'transfer Rp 5.000'], ['done', '--task', 'x'],
+    ['log', '--bot', 'ops'], ['log', '--bot', 'ops', '--text', 'rek 1234567890'], ['log', '--bot', 'ops', '--text', 'IDR 300'],
+    ['report', '--bot', 'ops', '--task-event', 'gagal'], ['report', '--bot', 'ops', '--task', 'x', '--task-event', 'aneh'],
+    ['report', '--bot', 'ops', '--task-note', 'x'], ['report', '--bot', 'ops', '--task', 'x', '--task-note', 'wa 081234567890'],
+  ];
+  for (const argv of bad) assert.throws(() => build(argv), UsageError, argv.join(' '));
+});
+
 test('loadKey: env diutamakan, lalu ~/.config/achphoria/bridge_key (peringatan bila mode longgar)', () => {
   const home = mkdtempSync(join(tmpdir(), 'achhome-'));
   assert.equal(loadKey({ env: {}, home }), '');

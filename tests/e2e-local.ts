@@ -6,7 +6,7 @@ import { FakeDb } from './fake-postgrest.ts';
 const UP = 54321, FN = 54322;
 const db = new FakeDb();
 db.tables.ach_agents.push({ id: 'research', name: 'Research', status: 'kerja', location: 'desk', activity: 'baca', current_task: null, updated_at: new Date().toISOString(), sort_order: 2 });
-const tg: { method: string; body: Record<string, unknown> }[] = [];
+const tg: { method: string; token: string; body: Record<string, unknown> }[] = [];
 const wakes: { auth: string | null; body: Record<string, unknown> }[] = [];
 let mid = 100;
 const upstream = Deno.serve({ port: UP, hostname: '127.0.0.1', onListen: () => {} }, async (req) => {
@@ -15,7 +15,7 @@ const upstream = Deno.serve({ port: UP, hostname: '127.0.0.1', onListen: () => {
   if (url.pathname.startsWith('/rest/v1/')) return db.handle(url, req.method, req.headers.get('prefer') ?? '', body);
   if (url.pathname.startsWith('/tg/')) {
     const method = url.pathname.split('/').pop()!;
-    tg.push({ method, body });
+    tg.push({ method, token: (url.pathname.split('/')[2] ?? '').replace(/^bot/, '').split(':')[0], body });
     return Response.json({ ok: true, result: method === 'sendMessage' ? { message_id: ++mid } : true });
   }
   if (url.pathname === '/wake/research') { wakes.push({ auth: req.headers.get('authorization'), body }); return new Response('ok'); }
@@ -26,6 +26,7 @@ const secrets = { TG_WEBHOOK_SECRET: 'e2e-webhook-secret', TG_CLAIM_CODE: 'E2E-C
 const fnEnv = {
   ...secrets, SUPABASE_URL: `http://127.0.0.1:${UP}`, SUPABASE_SERVICE_ROLE_KEY: 'eyJ.e2e.service',
   TG_API_BASE: `http://127.0.0.1:${UP}/tg`, TG_TOKEN_RESEARCH: '2000002:AAe2eTokenForResearchBotXXXXXXXXXX',
+  TG_TOKEN_CHIEF: '2000001:AAe2eTokenForChiefBotXXXXXXXXXXXXX',
   WAKE_URL_RESEARCH: `http://127.0.0.1:${UP}/wake/research`, WAKE_KEY_RESEARCH: 'e2e-wake-key',
   DENO_SERVE_ADDRESS: `tcp:127.0.0.1:${FN}`,
 };
@@ -44,7 +45,7 @@ for (let i = 0; i < 50; i++) {
 }
 let failed = 0;
 const check = (name: string, c: unknown) => { console.log((c ? '✔ ' : '✖ ') + name); if (!c) failed++; };
-const tgPost = (update: Record<string, unknown>, secret = secrets.TG_WEBHOOK_SECRET) => fetch(base + '/tg/research', {
+const tgPost = (update: Record<string, unknown>, secret = secrets.TG_WEBHOOK_SECRET, bot = 'research') => fetch(base + '/tg/' + bot, {
   method: 'POST', headers: { 'content-type': 'application/json', 'x-telegram-bot-api-secret-token': secret }, body: JSON.stringify(update),
 });
 const owner = { id: 4242, is_bot: false, first_name: 'Eight', last_name: 'Bit' };
@@ -83,6 +84,29 @@ try {
   check('outbox tercatat', db.tables.ach_outbox.length >= 3);
   const chats = await cli('chats', '--bot', 'research');
   check('CLI chats', chats.code === 0 && chats.json.rows[0].chat_id === owner.id);
+
+  // v4: grup ACHPHORIA LOGS
+  const LOGS = -100900;
+  const lr = await tgPost({ update_id: 50, message: { message_id: 50, from: owner, chat: { id: LOGS, type: 'supergroup', title: 'ACHPHORIA LOGS' }, date: 1, text: '/start' } }, secrets.TG_WEBHOOK_SECRET, 'chief');
+  await lr.body?.cancel();
+  check('LOGS: /start owner → role logs + konfirmasi Chief', db.tables.ach_tg_chats.some((c) => c.chat_id === LOGS && c.role === 'logs') &&
+    tg.at(-1)?.token === '2000001' && /Grup log ACHPHORIA aktif/.test(String(tg.at(-1)?.body.text)));
+  const nNew = tg.length;
+  const tn = await cli('task', 'new', '--bot', 'research', '--title', 'Tes grup log');
+  check('LOGS: task new → induk oleh Chief', tn.code === 0 && tn.json.log_feed.posted === 1 && tg.length === nNew + 1 && tg.at(-1)!.token === '2000001' &&
+    /^📋 Tugas #[0-9a-f]{8}: Tes grup log\nDivisi: Research\nStatus: Terjadwal$/.test(String(tg.at(-1)!.body.text)));
+  const rootId = tn.json?.log_feed?.root_message_id;
+  check('LOGS: root_message_id ada', typeof rootId === 'number');
+  const tc = await cli('claim', '--bot', 'research', '--task', 'Tes grup log', '--note', 'cek sumber');
+  const rp = (x: unknown) => (x as { message_id?: number } | undefined)?.message_id;
+  check('LOGS: claim --task → 🔄 balasan bot Research', tc.code === 0 && tg.at(-1)!.token === '2000002' && tg.at(-1)!.body.text === '🔄 Research: mulai kerja — cek sumber' && rp(tg.at(-1)!.body.reply_parameters) === rootId);
+  const td = await cli('done', '--bot', 'research', '--task', 'Tes grup log', '--note', 'ringkasan dikirim');
+  check('LOGS: done --task → ✅ balasan', td.code === 0 && tg.at(-1)!.body.text === '✅ Research: selesai — ringkasan dikirim' && rp(tg.at(-1)!.body.reply_parameters) === rootId &&
+    db.tables.ach_tasks.find((t) => t.title === 'Tes grup log')?.status === 'Selesai');
+  const tl = await cli('log', '--bot', 'research', '--text', 'catatan tambahan', '--task', 'Tes grup log');
+  check('LOGS: log --task → 📝 berutas', tl.code === 0 && tg.at(-1)!.body.text === '📝 Research: catatan tambahan' && rp(tg.at(-1)!.body.reply_parameters) === rootId);
+  check('LOGS: log Rp ditolak CLI', (await cli('log', '--bot', 'research', '--text', 'bayar Rp 5.000')).code === 1);
+
   const all = logs.join('') + JSON.stringify(db.tables);
   check('tidak ada rahasia di log/DB', !Object.values(secrets).some((v) => all.includes(v)) && !all.includes('e2e-wake-key') && !all.includes('AAe2eToken'));
 } finally {

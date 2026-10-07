@@ -72,6 +72,7 @@ node tools/ach.mjs send --bot research --chat <chat_id> --reply 345 --inbox 12 -
 | `--status` | `kerja` `terjadwal` `santai` `istirahat` `offline` |
 | `--location` | `desk` (zona kerjamu) `meeting` (kotatsu) `tea` `ramen` `tatami` `vending` `whiteboard` `offline` · `""` = jadwal otomatis WIB |
 | `--task-status` | `"Sedang kerja"` `Terjadwal` `Selesai` (butuh `--task`) |
+| `--task-event` | `gagal` `approval` (report; feed grup LOGS) · `task <event>`: `new` `start` `done` `fail` `approval` |
 | `inbox --status` | `baru` `diproses` `selesai` `gagal` `semua` |
 
 `--log` ditulis **tanpa nama agen** (website menambahkannya): `"gabung rapat di kotatsu"`, bukan `"Research gabung rapat"`.
@@ -94,6 +95,41 @@ node tools/ach.mjs send --bot chief --chat -100xxxxxxxxxx --reply 678 --text "Ok
 # Ops: progres di grup HQ
 node tools/ach.mjs send --bot ops --chat -100xxxxxxxxxx --text "📊 Data penjualan minggu ini sudah kutarik, lagi kurapikan."
 ```
+
+## 3b. Grup ACHPHORIA LOGS — feed update tugas (otomatis)
+
+Grup **ACHPHORIA LOGS** adalah papan update tugas. **Kamu tidak perlu memposting ke sana sendiri**: setiap kali
+kamu `report` dengan `--task …` atau memakai `task` / `claim|done|fail --task …`, bridge otomatis memposting:
+
+| Event | Siapa yang posting | Contoh |
+|---|---|---|
+| tugas baru | bot Chief (pesan induk) | `📋 Tugas #1a2b3c4d: Riset tren skincare` / `Divisi: Research` / `Status: Terjadwal` |
+| mulai (`Sedang kerja`) | bot divisimu, balasan ke induk | `🔄 Research: mulai kerja — riset tren skincare` |
+| selesai (`Selesai`) | bot divisimu | `✅ Research: selesai — ringkasan dikirim` |
+| gagal | bot divisimu | `❌ Research: gagal — butuh akses GA4` |
+| nunggu approval owner | bot divisimu | `⏳ Content: nunggu approval owner — draf caption siap` |
+
+- Posting hanya terjadi bila **status tugas berubah** (report berulang dengan status sama tidak spam).
+- Catatan diambil dari `--task-note`/`--note`; tanpa itu dari `--activity` (mulai) atau `--log` (selesai/gagal).
+- Status `gagal` & `approval` **tidak** mengubah status tugas di website (tetap `Sedang kerja`).
+- Gagal posting ke Telegram tidak pernah menggagalkan `report`/`task` (lihat `log_feed` di respons).
+- Grup LOGS **feed saja**: pesan/mention di sana tidak membangunkan asisten. Owner mendaftarkan grup dengan
+  `/start` atau `/logs` (judul grup mengandung "LOGS") atau `/setlogs`; `/unsetlogs` untuk mematikan.
+
+```bash
+node tools/ach.mjs task new --bot research --title "Riset tren skincare"                  # 📋 induk (Chief)
+node tools/ach.mjs claim 12 --bot research --task "Riset tren skincare" --note "cek 5 sumber"   # 🔄 + inbox #12 diproses
+node tools/ach.mjs task approval --bot content --task-id 1a2b3c4d --note "draf siap"       # ⏳
+node tools/ach.mjs done 12 --bot research --task "Riset tren skincare" --note "ringkasan dikirim" # ✅ + inbox #12 selesai
+node tools/ach.mjs fail --bot research --task "Riset tren skincare" --note "butuh akses GA4"     # ❌
+node tools/ach.mjs task new --bot chief --agent ops --title "Rekap mingguan"               # Chief menugaskan divisi
+node tools/ach.mjs log --bot ops --text "dashboard diperbarui" [--task "Rekap mingguan"]   # 📝 catatan bebas (bot sendiri)
+# alur lama tetap memicu feed: report --task "…" --task-status "Sedang kerja" | Selesai
+# report juga bisa: --task-event gagal|approval --task-note "…"  (butuh --task / --task-id)
+```
+
+`--task-id` menerima uuid atau 8 karakter dari `Tugas #…`. Filter angka sensitif (Rp/IDR, ≥9 digit, nomor HP)
+juga berlaku untuk `--note`, `--task-note`, dan `log --text`.
 
 ## 4. Perintah cepat (dijawab bridge tanpa membangunkanmu)
 
@@ -120,4 +156,5 @@ node tools/ach.mjs send --bot ops --chat -100xxxxxxxxxx --text "📊 Data penjua
 | `409 belum ada chat pribadi owner` | Owner belum pernah chat bot ini. Minta owner kirim `/start` ke bot tsb, atau pakai `--chat`. |
 | `403 chat … belum dikenal` | Bot belum pernah melihat chat itu. Cek `chats`; bot harus sudah ada di grup & menerima pesan. |
 | `400 … ditolak: mengandung …` | Hapus angka/nominal sensitif dari log/aktivitas/tugas. |
+| `409 grup log belum terdaftar` (`log`) / `log_feed.skipped` | Owner belum kirim `/setlogs` (atau `/start` di grup "ACHPHORIA LOGS"). |
 | Bot tidak merespons di grup | Privasi grup bot masih aktif (atur di @BotFather → /setprivacy → Disable) atau tidak di-mention. |

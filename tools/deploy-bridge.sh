@@ -15,7 +15,7 @@
 #
 #  Langkah:
 #    1. cek token bisa melihat project ini (GET /v1/projects/{ref})
-#    2. migrasi supabase/migrate-v3-telegram.sql  (Management API POST /v1/projects/{ref}/database/query)
+#    2. migrasi supabase/migrate-v3-telegram.sql + migrate-v4-logs.sql (Management API POST /v1/projects/{ref}/database/query)
 #    3. set secrets fungsi                         (Management API POST /v1/projects/{ref}/secrets)
 #    4. deploy fungsi: supabase functions deploy ach-bridge --project-ref … --no-verify-jwt --use-api
 #    5. cek GET …/ach-bridge/health
@@ -112,7 +112,7 @@ if (step === 'check-project') {
 
 if (step === 'migrate') {
   const query = readFileSync(process.env.ACH_SQL, 'utf8');
-  if (!/ach_inbox/.test(query)) { console.error('  ✖ file migrasi tidak dikenali'); process.exit(1); }
+  if (!/public\.ach_(inbox|tg_chats|tg_logmsg)/.test(query)) { console.error('  ✖ file migrasi tidak dikenali'); process.exit(1); }
   const r = await mgmt('/database/query', { method: 'POST', body: JSON.stringify({ query }) });
   if (!r.ok) { console.error(`  ✖ migrasi gagal: HTTP ${r.status} ${short(r.data)}`); process.exit(1); }
   const v = await mgmt('/database/query', { method: 'POST', body: JSON.stringify({ query:
@@ -121,8 +121,8 @@ if (step === 'migrate') {
             has_table_privilege('anon', c.oid, 'select') as anon_select,
             exists(select 1 from pg_publication_tables t where t.pubname='supabase_realtime' and t.schemaname='public' and t.tablename=c.relname) as realtime
        from pg_class c join pg_namespace n on n.oid=c.relnamespace
-      where n.nspname='public' and c.relname in ('ach_inbox','ach_outbox','ach_tg_allow','ach_tg_chats') order by 1` }) });
-  console.log('  ✔ migrasi v3 dijalankan');
+      where n.nspname='public' and c.relname in ('ach_inbox','ach_outbox','ach_tg_allow','ach_tg_chats','ach_tg_logmsg') order by 1` }) });
+  console.log('  ✔ migrasi ' + process.env.ACH_SQL.split('/').pop() + ' dijalankan');
   if (v.ok && Array.isArray(v.data)) for (const row of v.data) console.log(`    ${row.tabel}: rls=${row.rls} policies=${row.policies} anon_select=${row.anon_select} realtime=${row.realtime}`);
   if (v.ok && Array.isArray(v.data) && v.data.some((r) => !r.rls || r.anon_select || r.realtime || Number(r.policies) > 0)) { console.error('  ✖ verifikasi keamanan gagal!'); process.exit(1); }
 }
@@ -187,13 +187,17 @@ umask 077
 echo "▶ ACHPHORIA ach-bridge → project $PROJECT_REF $( [[ $DRY == 1 ]] && echo '(DRY-RUN)')"
 echo "1) secret bridge (bridge.env)"; run_node secrets-file
 if [[ "$DRY" == 1 ]]; then
-  echo "2) (dry-run) cek project, migrasi supabase/migrate-v3-telegram.sql via Management API"
+  echo "2) (dry-run) cek project, migrasi supabase/migrate-v3-telegram.sql + migrate-v4-logs.sql via Management API"
   echo "3) secrets:"; run_node set-secrets
   echo "4) (dry-run) supabase functions deploy ach-bridge --project-ref $PROJECT_REF --no-verify-jwt --use-api"
   echo "5) (dry-run) health check"; exit 0
 fi
 echo "2) cek project";            run_node check-project
-if [[ "$SKIP_MIG" != 1 ]]; then echo "3) migrasi v3"; ACH_SQL="$REPO/supabase/migrate-v3-telegram.sql" run_node migrate; fi
+if [[ "$SKIP_MIG" != 1 ]]; then
+  echo "3) migrasi v3 + v4"
+  ACH_SQL="$REPO/supabase/migrate-v3-telegram.sql" run_node migrate
+  ACH_SQL="$REPO/supabase/migrate-v4-logs.sql" run_node migrate
+fi
 if [[ "$SKIP_SEC" != 1 ]]; then echo "4) secrets fungsi"; run_node set-secrets; fi
 if [[ "$SKIP_DEP" != 1 ]]; then
   echo "5) deploy Edge Function ach-bridge"

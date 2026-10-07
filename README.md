@@ -79,6 +79,7 @@ tools/report.py               CLI laporan (Python 3, stdlib saja)
 tools/ach.mjs                 CLI jembatan Telegram untuk asisten (lihat "Jembatan Telegram (v3)")
 supabase/functions/ach-bridge Edge Function jembatan Telegram (Deno)
 supabase/migrate-v3-telegram.sql tabel privat jembatan Telegram
+supabase/migrate-v4-logs.sql  grup Telegram ACHPHORIA LOGS (role chat + ach_tg_logmsg)
 .nojekyll                     supaya GitHub Pages menyajikan file apa adanya
 ```
 
@@ -263,12 +264,14 @@ Lima bot Telegram (`@ach_chief_bot`, `@ach_research_bot`, `@ach_ops_bot`, `@ach_
 - **Masuk:** Telegram → `POST …/functions/v1/ach-bridge/tg/<id>` (dicek dengan header `X-Telegram-Bot-Api-Secret-Token`). Hanya user di allowlist `ach_tg_allow` yang dilayani; user lain dibalas sekali dengan sopan. Pesan dicatat di `ach_inbox`, lalu asisten dibangunkan lewat `WAKE_URL_<ID>` (opsional; tanpa itu pesan tetap tersimpan).
 - **Perintah cepat:** `/status`, `/tugas [id]`, `/help` dijawab langsung oleh bridge.
 - **Grup ACHPHORIA HQ:** bot hanya menanggapi mention, balasan ke pesannya, atau `/cmd@bot`. Chief adalah penerima default untuk pesan owner lainnya. Matikan *Group Privacy* di @BotFather minimal untuk chief.
-- **Keluar & laporan:** asisten memakai `node tools/ach.mjs` (`send`, `inbox`, `claim`, `done`, `fail`, `report`, `chats`) dengan `BRIDGE_KEY` (`~/.config/achphoria/bridge_key`), jadi tidak butuh service_role key. `report` memanggil `ach_report_activity` dan menolak nominal `Rp`/nomor telepon.
+- **Keluar & laporan:** asisten memakai `node tools/ach.mjs` (`send`, `inbox`, `claim`, `done`, `fail`, `report`, `task`, `log`, `chats`) dengan `BRIDGE_KEY` (`~/.config/achphoria/bridge_key`), jadi tidak butuh service_role key. `report` memanggil `ach_report_activity` dan menolak nominal `Rp`/nomor telepon.
+- **Grup ACHPHORIA LOGS (v4):** feed update tugas otomatis. Owner kirim `/start` atau `/logs` di grup yang judulnya mengandung "LOGS" (atau `/setlogs` di grup mana pun) → grup ditandai `ach_tg_chats.role = 'logs'` dan Chief mengonfirmasi. Setiap event tugas lewat `report`/`task` diposting bridge sendiri: tugas baru = pesan induk 📋 oleh bot Chief, lalu 🔄 mulai / ✅ selesai / ❌ gagal / ⏳ nunggu approval sebagai balasan berutas dari bot divisi (id pesan induk di `ach_tg_logmsg`). Grup ini feed saja: pesan biasa diabaikan. Gagal posting tidak menggagalkan laporan. Catatan bebas: `node tools/ach.mjs log --bot <id> --text "…" [--task "…"]`.
 - **Daftar owner:** kirim `/start <TG_CLAIM_CODE>` lewat chat pribadi ke salah satu bot. Kodenya ada di `~/.config/achphoria/bridge.env`. Setelah itu kirim `/start` ke bot-bot lain.
 
 | File | Isi |
 |---|---|
 | `supabase/migrate-v3-telegram.sql` | tabel privat `ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats` (RLS tanpa policy, idempotent, hanya `ach_*`) |
+| `supabase/migrate-v4-logs.sql` | kolom `ach_tg_chats.role` + tabel privat `ach_tg_logmsg` (pesan induk per tugas); otomatis menandai grup "ACHPHORIA LOGS" yang sudah tercatat |
 | `supabase/functions/ach-bridge/` | Edge Function (Deno, tanpa dependensi), `verify_jwt = false` di `supabase/config.toml` |
 | `tools/ach.mjs` | CLI asisten (Node 18+) |
 | `tools/deploy-bridge.sh` | migrasi + secrets + deploy + health check (butuh `SUPABASE_ACCESS_TOKEN`) |
@@ -289,4 +292,4 @@ Secret fungsi: `TG_TOKEN_<ID>`, `TG_WEBHOOK_SECRET`, `TG_CLAIM_CODE`, `BRIDGE_KE
 - Website hanya memakai **publishable/anon key** dan hanya bisa **membaca** (RLS + grant SELECT).
 - Penulisan hanya lewat **service_role/secret key**, baik langsung ke tabel maupun lewat `ach_report_activity` yang EXECUTE-nya sudah dicabut dari `public`, `anon`, dan `authenticated`.
 - ⚠️ **Jangan pernah** commit secret key ke repo ini atau menaruhnya di `config.js`.
-- Tabel jembatan Telegram (`ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats`) **privat**: RLS aktif tanpa policy, grant anon/authenticated dicabut, tidak masuk realtime. Token bot, `BRIDGE_KEY`, dan kode klaim hanya ada di Supabase secrets & `~/.config/achphoria/bridge.env` (chmod 600).
+- Tabel jembatan Telegram (`ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats`, `ach_tg_logmsg`) **privat**: RLS aktif tanpa policy, grant anon/authenticated dicabut, tidak masuk realtime. Token bot, `BRIDGE_KEY`, dan kode klaim hanya ada di Supabase secrets & `~/.config/achphoria/bridge.env` (chmod 600).

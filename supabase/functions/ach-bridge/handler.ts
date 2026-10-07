@@ -10,6 +10,12 @@
  *   POST /api          API asisten        (header x-ach-key = BRIDGE_KEY)
  *   GET  /health       {ok:true}
  *
+ * v4 — grup "ACHPHORIA LOGS": feed update tugas otomatis. Grup didaftarkan lewat
+ * /start · /logs (judul grup mengandung "LOGS") atau /setlogs oleh owner → ach_tg_chats.role='logs'.
+ * Setiap event tugas lewat report/task (baru, mulai, selesai, gagal, nunggu approval) diposting
+ * bridge ke grup itu: pesan induk oleh bot Chief, balasan berutas oleh bot divisi.
+ * id pesan induk per tugas disimpan di ach_tg_logmsg. Gagal posting tidak pernah memutus respons API.
+ *
  * ⚠️ Jangan pernah me-log nilai token / key. Semua pesan error dilewatkan redact().
  */
 
@@ -19,7 +25,18 @@ export const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'w
 export const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'] as const;
 export const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'] as const;
 export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal'] as const;
-export const VERSION = 'v3.0.0';
+export const VERSION = 'v4.0.0';
+export const TASK_EVENTS = ['gagal', 'approval'] as const;
+/** Judul grup yang otomatis dianggap grup log (feed saja). */
+export const LOG_TITLE = /\bLOGS\b/i;
+/** Pesan layanan Telegram (bukan isi percakapan) — tidak pernah masuk inbox. */
+const SERVICE_KEYS = [
+  'new_chat_members', 'left_chat_member', 'new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'group_chat_created',
+  'supergroup_chat_created', 'channel_chat_created', 'migrate_to_chat_id', 'migrate_from_chat_id', 'pinned_message',
+  'message_auto_delete_timer_changed', 'forum_topic_created', 'forum_topic_edited', 'forum_topic_closed', 'forum_topic_reopened',
+  'video_chat_started', 'video_chat_ended', 'video_chat_scheduled', 'video_chat_participants_invited', 'boost_added', 'chat_background_set',
+];
+const FEED_TIMEOUT_MS = 6000;
 
 export const DIVISION: Record<AgentId, { name: string; username: string; home: string; emoji: string }> = {
   chief: { name: 'Chief of Staff', username: 'ach_chief_bot', home: 'Kotatsu', emoji: '📜' },
@@ -156,7 +173,7 @@ function describeMedia(m: Json): string {
   if (m.location) return '[lokasi]';
   if (m.contact) return '[kontak]';
   if (m.poll) return '[polling: ' + (m.poll.question || '') + ']';
-  if (m.new_chat_members || m.left_chat_member || m.new_chat_title) return '';
+  if (SERVICE_KEYS.some((k) => m[k] !== undefined)) return '';
   return '[pesan tanpa teks]';
 }
 
@@ -261,14 +278,14 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   };
   const botUsername = (bot: AgentId) => (env('TG_USERNAME_' + UP(bot)) ?? DIVISION[bot].username).replace(/^@/, '').toLowerCase();
 
-  async function tg(bot: AgentId, method: string, payload: Json): Promise<Json> {
+  async function tg(bot: AgentId, method: string, payload: Json, timeoutMs = 15000): Promise<Json> {
     const token = env('TG_TOKEN_' + UP(bot));
     if (!token) return { ok: false, description: 'TG_TOKEN_' + UP(bot) + ' belum di-set' };
     const base = (env('TG_API_BASE') ?? 'https://api.telegram.org').replace(/\/+$/, '');
     try {
       const res = await f(`${base}/bot${token}/${method}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       const j = await res.json().catch(() => ({ ok: false, description: 'HTTP ' + res.status }));
       if (!j.ok) j.description = redact(j.description ?? 'HTTP ' + res.status);
@@ -279,7 +296,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
   }
 
   /** Kirim teks (dipecah bila panjang) + catat ke ach_outbox. */
-  async function sendText(bot: AgentId, chatId: number, text: string, opts: { replyTo?: number | null; parseMode?: string | null; silent?: boolean } = {}) {
+  async function sendText(bot: AgentId, chatId: number, text: string, opts: { replyTo?: number | null; parseMode?: string | null; silent?: boolean; timeoutMs?: number } = {}) {
     const parts = splitText(text);
     const results: { ok: boolean; message_id?: number; error?: string }[] = [];
     for (let i = 0; i < parts.length; i++) {
@@ -287,7 +304,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (opts.parseMode) payload.parse_mode = opts.parseMode;
       if (opts.silent) payload.disable_notification = true;
       if (i === 0 && opts.replyTo) payload.reply_parameters = { message_id: opts.replyTo, allow_sending_without_reply: true };
-      const r = await tg(bot, 'sendMessage', payload);
+      const r = await tg(bot, 'sendMessage', payload, opts.timeoutMs);
       const row = {
         bot, chat_id: chatId, text: parts[i], reply_to_message_id: i === 0 ? opts.replyTo ?? null : null,
         telegram_message_id: r.ok ? r.result?.message_id ?? null : null, ok: !!r.ok, error: r.ok ? null : String(r.description ?? 'gagal'),
@@ -305,14 +322,85 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     const rows = await db(`ach_tg_allow?select=from_id&from_id=eq.${fromId}&limit=1`);
     return Array.isArray(rows) && rows.length > 0;
   }
-  async function upsertChat(bot: AgentId, chat: Json) {
-    if (!chat?.id) return;
+  /** Catat/perbarui chat; kembalikan role chat ('logs' | 'hq' | null). */
+  async function upsertChat(bot: AgentId, chat: Json): Promise<string | null> {
+    if (!chat?.id) return null;
     try {
-      await db('ach_tg_chats?on_conflict=bot,chat_id', {
-        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+      const rows = await db('ach_tg_chats?on_conflict=bot,chat_id&select=role', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=representation',
         body: { bot, chat_id: chat.id, chat_type: chat.type ?? null, title: chat.title ?? fullName(chat), username: chat.username ?? null, last_seen: now().toISOString() },
       });
-    } catch (e) { warn('upsert chat gagal:', redact(e)); }
+      return Array.isArray(rows) && rows.length ? rows[0].role ?? null : null;
+    } catch (e) { warn('upsert chat gagal:', redact(e)); return null; }
+  }
+
+  /* ---------- grup LOGS (v4) ---------- */
+  async function logChatId(): Promise<number | null> {
+    const rows: Json[] = await db('ach_tg_chats?select=chat_id&role=eq.logs&order=last_seen.desc&limit=1');
+    return Array.isArray(rows) && rows.length ? Number(rows[0].chat_id) : null;
+  }
+  /** Jadikan chatId satu-satunya grup log (role chat lain 'logs' dikosongkan). */
+  async function setLogChat(chatId: number) {
+    await db('ach_tg_chats?role=eq.logs', { method: 'PATCH', prefer: 'return=minimal', body: { role: null } });
+    await db(`ach_tg_chats?chat_id=eq.${chatId}`, { method: 'PATCH', prefer: 'return=minimal', body: { role: 'logs' } });
+  }
+  const shortId = (id: string) => String(id).split('-')[0].slice(0, 8);
+  const divName = (a: string) => (isAgent(a) ? DIVISION[a].name : a);
+  interface TaskRef { id: string; title: string; status: string; agent_id: string }
+  type FeedEvent = 'new' | 'start' | 'done' | 'scheduled' | 'gagal' | 'approval' | 'note';
+  function feedLine(ev: FeedEvent, agent: string, note: string | null): string {
+    const d = divName(agent), tail = note ? ' — ' + note : '';
+    switch (ev) {
+      case 'start': return `🔄 ${d}: mulai kerja${tail}`;
+      case 'done': return `✅ ${d}: selesai${tail}`;
+      case 'gagal': return `❌ ${d}: gagal${tail}`;
+      case 'approval': return `⏳ ${d}: nunggu approval owner${tail}`;
+      case 'scheduled': return `🗓 ${d}: dijadwalkan ulang${tail}`;
+      default: return `📝 ${d}: ${note ?? ''}`.trim();
+    }
+  }
+  /** Pesan induk tugas di grup log (dibuat bot Chief bila belum ada). */
+  async function ensureRoot(chatId: number, task: TaskRef, note: string | null): Promise<{ message_id: number | null; created: boolean; error?: string }> {
+    const have: Json[] = await db(`ach_tg_logmsg?select=message_id&task_id=eq.${q(task.id)}&chat_id=eq.${chatId}&limit=1`);
+    if (have.length && have[0].message_id) return { message_id: Number(have[0].message_id), created: false };
+    const text = `📋 Tugas #${shortId(task.id)}: ${task.title}\nDivisi: ${divName(task.agent_id)}\nStatus: ${task.status}` + (note ? `\nCatatan: ${note}` : '');
+    const r = await sendText('chief', chatId, text, { timeoutMs: FEED_TIMEOUT_MS });
+    const mid = r.ok ? r.results[0]?.message_id ?? null : null;
+    if (!mid) return { message_id: null, created: false, error: r.results.find((x) => !x.ok)?.error ?? 'gagal' };
+    try {
+      await db('ach_tg_logmsg?on_conflict=task_id,chat_id', {
+        method: 'POST', prefer: 'resolution=merge-duplicates,return=minimal',
+        body: { task_id: task.id, chat_id: chatId, message_id: mid, agent_id: task.agent_id },
+      });
+    } catch (e) { warn('simpan ach_tg_logmsg gagal:', redact(e)); }
+    return { message_id: mid, created: true };
+  }
+  /** Posting balasan di grup log oleh bot divisi; bila gagal (bot tak ada di grup, dsb.) coba lewat Chief. */
+  async function feedReply(agent: string, chatId: number, text: string, replyTo: number | null) {
+    const bot: AgentId = isAgent(agent) ? agent : 'chief';
+    let r = await sendText(bot, chatId, text, { replyTo, timeoutMs: FEED_TIMEOUT_MS });
+    if (!r.ok && bot !== 'chief') r = await sendText('chief', chatId, text, { replyTo, timeoutMs: FEED_TIMEOUT_MS });
+    return r;
+  }
+  /** Best effort: tidak pernah melempar error. */
+  async function feedTask(task: TaskRef, events: FeedEvent[], note: string | null): Promise<Json> {
+    try {
+      const chatId = await logChatId();
+      if (chatId === null) return { ok: false, posted: 0, skipped: 'grup log belum terdaftar' };
+      const root = await ensureRoot(chatId, task, events.length === 1 && events[0] === 'new' ? note : null);
+      let posted = root.created ? 1 : 0;
+      const errors: string[] = root.error ? ['induk: ' + root.error] : [];
+      for (const ev of events) {
+        if (ev === 'new') continue;
+        const r = await feedReply(task.agent_id, chatId, feedLine(ev, task.agent_id, note), root.message_id);
+        if (r.ok) posted++; else errors.push(ev + ': ' + (r.results.find((x) => !x.ok)?.error ?? 'gagal'));
+      }
+      if (errors.length) warn('feed grup log:', errors.join('; '));
+      return { ok: !errors.length, posted, task_id: task.id, root_message_id: root.message_id, ...(errors.length ? { errors } : {}) };
+    } catch (e) {
+      warn('feed grup log gagal:', redact(e));
+      return { ok: false, posted: 0, error: redact(e) };
+    }
   }
   async function patchInbox(id: number, patch: Json) {
     try { await db(`ach_inbox?id=eq.${id}`, { method: 'PATCH', body: patch, prefer: 'return=minimal' }); } catch (e) { warn('patch inbox gagal:', redact(e)); }
@@ -360,6 +448,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       '/status — posisi & aktivitas kelima agen di kantor virtual',
       '/tugas — daftar tugas terbuka (bisa /tugas research, /tugas ops, …)',
       '/help — bantuan ini',
+      '/setlogs — (di grup, owner) jadikan grup ini grup log update tugas',
       '',
       `Pesan lain akan diteruskan ke asisten ${d.name}; balasannya menyusul di chat ini.`,
       bot === 'chief'
@@ -426,8 +515,25 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
     const inc = parseUpdate(update);
     if (!inc || !inc.chat) return;
-    await upsertChat(bot, inc.chat);
+    const chatRole = await upsertChat(bot, inc.chat);
     if (inc.kind === 'callback_query' && inc.callbackId) await tg(bot, 'answerCallbackQuery', { callback_query_id: inc.callbackId });
+
+    // pesan layanan (anggota masuk/keluar, ganti judul, migrasi grup → supergroup, pin, …): bukan perintah
+    if (inc.kind !== 'callback_query' && inc.msg && SERVICE_KEYS.some((k) => inc.msg[k] !== undefined)) {
+      const from = inc.msg.migrate_to_chat_id ? inc.chat.id : inc.msg.migrate_from_chat_id;
+      const to = inc.msg.migrate_to_chat_id ? inc.msg.migrate_to_chat_id : inc.msg.migrate_from_chat_id ? inc.chat.id : null;
+      if (from && to) {
+        // grup jadi supergroup → chat_id berubah; bawa role (mis. 'logs') ke chat_id baru
+        try {
+          const old: Json[] = await db(`ach_tg_chats?select=role&chat_id=eq.${from}&role=eq.logs&limit=1`);
+          if (old.length) {
+            if (to !== inc.chat.id) await upsertChat(bot, { id: to, type: 'supergroup', title: inc.chat.title });
+            await setLogChat(Number(to));
+          }
+        } catch (e) { warn('migrasi role chat gagal:', redact(e)); }
+      }
+      return;
+    }
 
     const me = botUsername(bot);
     const myId = botUserId(bot);
@@ -453,6 +559,42 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     let allowed = false;
     if (fromSibling) allowed = true;
     else if (from?.id && !fromBot) allowed = await isAllowed(from.id);
+
+    // --- grup LOGS: feed saja (v4) ---
+    const isGroup = chatType === 'group' || chatType === 'supergroup';
+    const title = String(inc.chat.title ?? '');
+    const isLogChat = isGroup && (chatRole === 'logs' || LOG_TITLE.test(title));
+    const ourTarget = !cmd?.target || cmd.target === me || sib.names.has(cmd.target);
+    const regCmd = !!cmd && isGroup && ourTarget && !fromBot && (cmd.name === 'setlogs' || cmd.name === 'unsetlogs' ||
+      ((cmd.name === 'start' || cmd.name === 'logs') && !cmd.args && LOG_TITLE.test(title)));
+    if (regCmd) {
+      if (bot !== 'chief' || !allowed) return; // hanya Chief yang mendaftarkan, hanya untuk owner; bot lain diam
+      const row = await db('ach_inbox?on_conflict=bot,update_id&select=id', {
+        method: 'POST', prefer: 'resolution=ignore-duplicates,return=representation',
+        body: {
+          bot, update_id: inc.updateId, chat_id: inc.chat.id, chat_type: chatType, chat_title: title || null,
+          from_id: from?.id ?? null, from_name: fullName(from), from_username: from?.username ?? null, text: inc.text,
+          message_id: inc.messageId, reply_to_message_id: inc.replyTo, update, status: 'selesai',
+          note: cmd!.name === 'unsetlogs' ? 'grup log dinonaktifkan' : 'grup log didaftarkan', handled_at: now().toISOString(),
+        },
+      });
+      if (!Array.isArray(row) || !row.length) return; // duplikat
+      if (cmd!.name === 'unsetlogs') {
+        await db(`ach_tg_chats?chat_id=eq.${inc.chat.id}&role=eq.logs`, { method: 'PATCH', prefer: 'return=minimal', body: { role: null } });
+        await sendText('chief', inc.chat.id, '📕 Grup log ACHPHORIA dinonaktifkan. Update tugas tidak lagi diposting di sini.', { replyTo: inc.messageId });
+        return;
+      }
+      await setLogChat(inc.chat.id);
+      await sendText('chief', inc.chat.id, chatRole === 'logs'
+        ? '📒 Grup log ACHPHORIA sudah aktif. Semua update tugas bakal muncul di sini.'
+        : '📒 Grup log ACHPHORIA aktif. Semua update tugas bakal muncul di sini.');
+      return;
+    }
+    if (isLogChat) {
+      // pesan biasa / mention / perintah lain tidak membangunkan asisten; hanya perintah cepat yang dijawab
+      const quickOnly = !!cmd && ['status', 'tugas', 'help', 'bantuan'].includes(cmd.name);
+      if (!quickOnly) return;
+    }
 
     // apakah pesan ini ditujukan ke bot ini?
     let addressed: boolean;
@@ -609,13 +751,121 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     return first === undefined ? null : Number(first);
   }
 
+  const TASK_COLS = 'id,title,status,agent_id';
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /** Cari tugas berdasarkan id (uuid penuh atau 8 karakter awal, mis. dari "Tugas #1a2b3c4d") atau judul (agen ini, utamakan yang belum Selesai). */
+  async function findTask(agent: AgentId | null, ref: { id?: string | null; title?: string | null }, pool?: TaskRef[]): Promise<TaskRef | null> {
+    const id = ref.id ? String(ref.id).trim().replace(/^#/, '').toLowerCase() : '';
+    if (id) {
+      if (UUID_RE.test(id)) {
+        const rows: TaskRef[] = await db(`ach_tasks?select=${TASK_COLS}&id=eq.${q(id)}&limit=1`);
+        return rows[0] ?? null;
+      }
+      if (!/^[0-9a-f]{4,8}$/.test(id)) throw new HttpError(400, 'task_id harus uuid atau 4–8 karakter heksadesimal awal (mis. 1a2b3c4d)');
+      const rows: TaskRef[] = pool ?? await db(`ach_tasks?select=${TASK_COLS}&order=updated_at.desc&limit=2000`);
+      const hits = rows.filter((t) => String(t.id).toLowerCase().startsWith(id));
+      if (hits.length > 1) throw new HttpError(409, `task_id #${id} ambigu (${hits.length} tugas); pakai id lebih panjang`);
+      return hits[0] ?? null;
+    }
+    const title = ref.title ? String(ref.title).trim().toLowerCase() : '';
+    if (!title) return null;
+    const rows: TaskRef[] = (pool ?? await db(`ach_tasks?select=${TASK_COLS}&agent_id=eq.${agent}&order=updated_at.desc&limit=2000`))
+      .filter((t: TaskRef) => (!agent || t.agent_id === agent) && String(t.title).trim().toLowerCase() === title);
+    return rows.find((t) => t.status !== 'Selesai') ?? rows[0] ?? null;
+  }
+
+  /**
+   * report (+ feed grup log). body: status, location, activity, task, task_status, log,
+   * task_note (catatan untuk grup log), task_event ('gagal' | 'approval'), task_id.
+   */
+  async function doReport(agent: AgentId, body: Json): Promise<Json> {
+    const status = str(body.status), location = str(body.location);
+    let taskStatus = str(body.task_status), task = str(body.task);
+    const taskNote = str(body.task_note)?.trim() || null, taskIdRef = str(body.task_id);
+    let taskEvent = str(body.task_event)?.toLowerCase() ?? null;
+    if (taskEvent === 'fail' || taskEvent === 'failed') taskEvent = 'gagal';
+    if (taskEvent === 'nunggu_approval' || taskEvent === 'menunggu_approval') taskEvent = 'approval';
+    if (status && !(STATUSES as readonly string[]).includes(status)) throw new HttpError(400, 'status: ' + STATUSES.join(', '));
+    if (location && !(ROOMS as readonly string[]).includes(location)) throw new HttpError(400, 'location: ' + ROOMS.join(', ') + " ('' = jadwal otomatis)");
+    if (taskStatus && !(TASK_STATUSES as readonly string[]).includes(taskStatus)) throw new HttpError(400, 'task_status: ' + TASK_STATUSES.join(' | '));
+    if (taskEvent && !(TASK_EVENTS as readonly string[]).includes(taskEvent)) throw new HttpError(400, 'task_event: ' + TASK_EVENTS.join(' | '));
+    for (const k of ['log', 'activity', 'task', 'task_note'] as const) {
+      const why = sensitiveReason(str(body[k]));
+      if (why) throw new HttpError(400, `${k} ditolak: ${why}. Data ini tampil publik (website / grup log) — tulis tanpa angka sensitif.`);
+    }
+    if ((taskEvent || taskNote) && !task && !taskIdRef) throw new HttpError(400, 'task_event/task_note butuh task (judul) atau task_id');
+
+    // keadaan tugas sebelum laporan → bedakan tugas baru / perubahan status (tanpa spam bila status sama)
+    let before: TaskRef[] | null = null;
+    let target: TaskRef | null = null;
+    if (task || taskIdRef) {
+      try {
+        before = await db(`ach_tasks?select=${TASK_COLS}&agent_id=eq.${agent}&order=updated_at.desc&limit=2000`);
+      } catch (e) {
+        if (taskIdRef || taskEvent) throw e;
+        warn('baca tugas untuk feed gagal (laporan tetap jalan):', redact(e)); // feed dilewati, laporan tetap
+      }
+    }
+    if (before) {
+      if (taskIdRef) {
+        target = await findTask(agent, { id: taskIdRef }, before!);
+        if (!target) throw new HttpError(404, `tugas #${taskIdRef} milik ${agent} tidak ditemukan`);
+        task = target.title;
+      }
+      if (taskEvent && !taskStatus) {
+        // gagal / nunggu approval: status tugas di website tidak diubah
+        target ??= await findTask(agent, { title: task }, before!);
+        if (!target) throw new HttpError(404, `tugas "${task}" milik ${agent} tidak ditemukan`);
+        task = null;
+      }
+    }
+    if (task && !taskStatus) taskStatus = 'Sedang kerja'; // default sama dengan ach_report_activity
+
+    let res: Json = null;
+    const hasRpc = status !== null || location !== null || body.activity != null || task !== null || (body.log != null && String(body.log).trim() !== '');
+    if (!hasRpc && !target) throw new HttpError(400, 'report kosong: isi minimal status/location/activity/task/log');
+    if (hasRpc) {
+      res = await db('rpc/ach_report_activity', {
+        method: 'POST',
+        body: {
+          p_agent_id: agent, p_status: status, p_location: location, p_activity: str(body.activity),
+          p_task: task, p_task_status: task ? taskStatus : str(body.task_status), p_log: str(body.log),
+        },
+      });
+    }
+
+    // feed grup log (best effort)
+    let feed: Json = undefined;
+    if (before) {
+      const taskId: string | null = res?.task_id ?? target?.id ?? null;
+      if (taskId) {
+        const prev = before.find((t) => t.id === taskId) ?? null;
+        const nowStatus = task ? taskStatus! : (target?.status ?? prev?.status ?? 'Terjadwal');
+        const ref: TaskRef = { id: taskId, title: task ?? target?.title ?? prev?.title ?? '', status: nowStatus, agent_id: agent };
+        const map: Record<string, FeedEvent> = { 'Sedang kerja': 'start', Selesai: 'done', Terjadwal: 'scheduled' };
+        const events: FeedEvent[] = [];
+        if (!prev) events.push('new');
+        if (taskEvent) events.push(taskEvent as FeedEvent);
+        else if (prev ? prev.status !== nowStatus : nowStatus !== 'Terjadwal') events.push(map[nowStatus]);
+        const pick = (...v: unknown[]) => (v.find((x) => typeof x === 'string' && x.trim()) as string | undefined)?.trim() ?? null;
+        const ev0 = events.find((e) => e !== 'new');
+        const note = taskNote ?? (ev0 === 'start' ? pick(body.activity, body.log) : ev0 ? pick(body.log, body.activity) : null);
+        if (events.length) feed = await feedTask(ref, events, note);
+        else feed = { ok: true, posted: 0, skipped: 'status tugas tidak berubah' };
+      }
+    }
+    return { ok: true, result: res, ...(feed !== undefined ? { log_feed: feed } : {}) };
+  }
+
   async function api(body: Json): Promise<Json> {
     const action = String(body?.action ?? '');
     switch (action) {
       case 'ping': {
         const bot = body.bot && isAgent(body.bot) ? body.bot : null;
         const cfg = (b: AgentId) => ({ token: !!env('TG_TOKEN_' + UP(b)), wake_url: !!env('WAKE_URL_' + UP(b)), wake_key: !!env('WAKE_KEY_' + UP(b)) });
-        return { ok: true, version: VERSION, configured: bot ? { [bot]: cfg(bot) } : Object.fromEntries(AGENTS.map((a) => [a, cfg(a)])) };
+        let logs: boolean | null = null;
+        try { logs = (await logChatId()) !== null; } catch { /* db tidak tersedia */ }
+        return { ok: true, version: VERSION, logs_group: logs, configured: bot ? { [bot]: cfg(bot) } : Object.fromEntries(AGENTS.map((a) => [a, cfg(a)])) };
       }
       case 'send': {
         const bot = needBot(body.bot);
@@ -687,32 +937,67 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (!rows.length) throw new HttpError(404, `inbox #${id} tidak ada`);
         return { ok: true, row: rows[0] };
       }
-      case 'report': {
+      case 'report':
+        return await doReport(needBot(body.bot), body);
+      case 'task': {
+        // event tugas eksplisit: new | start | done | fail | approval (+ opsional inbox_id → status inbox ikut diubah)
         const bot = needBot(body.bot);
-        const status = str(body.status), location = str(body.location), taskStatus = str(body.task_status);
-        if (status && !(STATUSES as readonly string[]).includes(status)) throw new HttpError(400, 'status: ' + STATUSES.join(', '));
-        if (location && !(ROOMS as readonly string[]).includes(location)) throw new HttpError(400, 'location: ' + ROOMS.join(', ') + " ('' = jadwal otomatis)");
-        if (taskStatus && !(TASK_STATUSES as readonly string[]).includes(taskStatus)) throw new HttpError(400, 'task_status: ' + TASK_STATUSES.join(' | '));
-        for (const k of ['log', 'activity', 'task'] as const) {
-          const why = sensitiveReason(str(body[k]));
-          if (why) throw new HttpError(400, `${k} ditolak: ${why}. Data ini tampil publik di website — tulis tanpa angka sensitif.`);
-        }
-        const res = await db('rpc/ach_report_activity', {
-          method: 'POST',
-          body: {
-            p_agent_id: bot, p_status: status, p_location: location, p_activity: str(body.activity),
-            p_task: str(body.task), p_task_status: taskStatus, p_log: str(body.log),
-          },
+        const ev = String(body.event ?? '').toLowerCase();
+        const EV: Record<string, Json> = {
+          new: { task_status: 'Terjadwal' }, baru: { task_status: 'Terjadwal' },
+          start: { task_status: 'Sedang kerja' }, mulai: { task_status: 'Sedang kerja' }, claim: { task_status: 'Sedang kerja' },
+          done: { task_status: 'Selesai' }, selesai: { task_status: 'Selesai' },
+          fail: { task_event: 'gagal' }, gagal: { task_event: 'gagal' }, approval: { task_event: 'approval' },
+        };
+        if (!EV[ev]) throw new HttpError(400, 'event: new | start | done | fail | approval');
+        const agent = body.agent ? needBot(body.agent) : bot;
+        if (agent !== bot && !['new', 'baru'].includes(ev)) throw new HttpError(400, 'agent lain hanya untuk event new (Chief menugaskan divisi)');
+        const title = str(body.title ?? body.task);
+        if (!title && !body.task_id) throw new HttpError(400, 'title (judul tugas) atau task_id wajib');
+        if (['new', 'baru'].includes(ev) && !title) throw new HttpError(400, 'event new butuh title');
+        const inboxId = intOrNull(body.inbox_id, 'inbox_id');
+        const r = await doReport(agent, {
+          ...EV[ev], task: title, task_id: body.task_id, task_note: body.note,
+          status: body.status, location: body.location, activity: body.activity, log: body.log,
         });
-        return { ok: true, result: res };
+        if (inboxId) {
+          const isStart = EV[ev].task_status === 'Sedang kerja';
+          const patch: Json = isStart ? { status: 'diproses' } : { status: ev === 'fail' || ev === 'gagal' ? 'gagal' : ev === 'approval' ? 'diproses' : 'selesai', handled_at: now().toISOString() };
+          if (body.note != null && !isStart) patch.note = String(body.note).slice(0, 2000);
+          try {
+            await db(`ach_inbox?id=eq.${inboxId}&bot=eq.${bot}${isStart ? '&status=eq.baru' : ''}`, { method: 'PATCH', prefer: 'return=minimal', body: patch });
+            r.inbox = { id: inboxId, status: patch.status };
+          } catch (e) { r.inbox = { id: inboxId, error: redact(e) }; }
+        }
+        return r;
+      }
+      case 'log': {
+        // posting bebas ke grup log sebagai bot sendiri, berutas di bawah tugas bila diberi task/task_id
+        const bot = needBot(body.bot);
+        const text = str(body.text)?.trim();
+        if (!text) throw new HttpError(400, 'text wajib');
+        const why = sensitiveReason(text);
+        if (why) throw new HttpError(400, `text ditolak: ${why}. Grup log bukan tempat angka sensitif.`);
+        const chatId = await logChatId();
+        if (chatId === null) throw new HttpError(409, 'grup log belum terdaftar — owner kirim /setlogs (atau /start di grup "… LOGS")');
+        let replyTo: number | null = null, task: TaskRef | null = null;
+        if (body.task_id || body.task) {
+          task = await findTask(bot, { id: str(body.task_id), title: str(body.task) });
+          if (!task) throw new HttpError(404, 'tugas tidak ditemukan');
+          const root = await ensureRoot(chatId, task, null);
+          replyTo = root.message_id;
+        }
+        const r = await sendText(bot, chatId, feedLine('note', bot, text), { replyTo });
+        if (!r.ok) throw new HttpError(502, 'telegram: ' + (r.results.find((x) => !x.ok)?.error ?? 'gagal'));
+        return { ok: true, message_ids: r.results.map((x) => x.message_id), task_id: task?.id ?? null, reply_to: replyTo };
       }
       case 'chats': {
         const bot = needBot(body.bot);
-        const rows = await db(`ach_tg_chats?select=chat_id,chat_type,title,username,last_seen&bot=eq.${bot}&order=last_seen.desc&limit=100`);
+        const rows = await db(`ach_tg_chats?select=chat_id,chat_type,title,username,role,last_seen&bot=eq.${bot}&order=last_seen.desc&limit=100`);
         return { ok: true, count: rows.length, rows };
       }
       default:
-        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, typing, inbox, claim, done, fail, report, chats, ping');
+        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, typing, inbox, claim, done, fail, report, task, log, chats, ping');
     }
   }
 

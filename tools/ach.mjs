@@ -17,6 +17,11 @@
  *   node tools/ach.mjs inbox --bot research [--status baru|diproses|selesai|gagal|semua] [--limit 20]
  *   node tools/ach.mjs claim 12 · done 12 --note "beres" · fail 12 --note "butuh akses"
  *   node tools/ach.mjs chats --bot chief          (cari chat_id grup ACHPHORIA HQ)
+ *   v4 grup ACHPHORIA LOGS (bridge memposting update tugas otomatis):
+ *   node tools/ach.mjs task new   --bot research --title "Tes grup log"
+ *   node tools/ach.mjs claim --bot research --task "Tes grup log" [--inbox 12] --note "mulai cek sumber"
+ *   node tools/ach.mjs done  --bot research --task "Tes grup log" [--inbox 12] --note "ringkasan dikirim"
+ *   node tools/ach.mjs log   --bot research --text "progres 50%" [--task "Tes grup log" | --task-id 1a2b3c4d]
  */
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -29,15 +34,18 @@ export const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'w
 export const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'];
 export const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'];
 export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal', 'semua'];
+export const TASK_EVENTS = ['new', 'start', 'done', 'fail', 'approval'];
+const REPORT_TASK_EVENTS = ['gagal', 'approval'];
 const BOOL_FLAGS = new Set(['html', 'silent', 'full', 'json', 'dry_run', 'help']);
-const COMMANDS = ['report', 'send', 'typing', 'inbox', 'claim', 'done', 'fail', 'chats', 'ping'];
+const COMMANDS = ['report', 'send', 'typing', 'inbox', 'claim', 'done', 'fail', 'task', 'log', 'chats', 'ping'];
 
 export const HELP = `ACHPHORIA · CLI jembatan Telegram (ach-bridge)
 
 Pemakaian: node tools/ach.mjs <perintah> [opsi]
 
   report  --bot <id> [--status <s>] [--location <ruang>] [--activity <teks>]
-          [--task <judul>] [--task-status "Sedang kerja"|Terjadwal|Selesai] [--log <pesan>]
+          [--task <judul> | --task-id <id>] [--task-status "Sedang kerja"|Terjadwal|Selesai] [--log <pesan>]
+          [--task-event gagal|approval] [--task-note <catatan untuk grup log>]
   send    --bot <id> (--text <teks> | --text-file <path> | --text -  [stdin])
           [--chat <chat_id>] [--reply <message_id>] [--inbox <inbox_id>] [--html] [--silent]
           (tanpa --chat → chat pribadi owner dengan bot ini)
@@ -46,6 +54,12 @@ Pemakaian: node tools/ach.mjs <perintah> [opsi]
   claim   <inbox_id> [--bot <id>]          tandai 'diproses' (gagal bila sudah diklaim)
   done    <inbox_id> [--note <teks>]       tandai 'selesai'
   fail    <inbox_id> [--note <teks>]       tandai 'gagal'
+          claim/done/fail + --task <judul> | --task-id <id>  → event tugas (mulai/selesai/gagal) +
+          posting otomatis ke grup LOGS; <inbox_id>/--inbox opsional ikut diubah statusnya
+  task    new|start|done|fail|approval --bot <id> (--title <judul> | --task-id <id>)
+          [--note <catatan>] [--agent <id> (hanya new: Chief menugaskan divisi)] [--inbox <inbox_id>]
+  log     --bot <id> --text <teks> [--task <judul> | --task-id <id>]
+          posting bebas ke grup ACHPHORIA LOGS sebagai bot sendiri (berutas di bawah tugas)
   chats   --bot <id>                       chat yang dikenal bot (mis. grup HQ)
   ping    [--bot <id>]                     cek koneksi & konfigurasi (tanpa membuka rahasia)
 
@@ -54,7 +68,8 @@ Env: ACH_BRIDGE_URL, ACH_BRIDGE_KEY (atau ~/.config/achphoria/bridge_key), ACH_B
 Bot     : ${AGENTS.join(' ')}
 Ruang   : ${ROOMS.join(' ')}  ('' = jadwal otomatis)
 Status  : ${STATUSES.join(' ')}
-Tugas   : "Sedang kerja" | Terjadwal | Selesai`;
+Tugas   : "Sedang kerja" | Terjadwal | Selesai
+Grup LOGS: report/task otomatis memposting 📋 tugas baru, 🔄 mulai, ✅ selesai, ❌ gagal, ⏳ nunggu approval`;
 
 export class UsageError extends Error {}
 
@@ -117,15 +132,23 @@ export function buildRequest(parsed, { env = process.env, readText } = {}) {
         if (opts.location !== '' && !ROOMS.includes(opts.location)) throw new UsageError('lokasi tidak valid. Pilih: ' + ROOMS.join(', ') + " ('' = jadwal otomatis)");
         b.location = opts.location;
       }
+      const hasTask = opts.task !== undefined || opts.task_id !== undefined;
       if (opts.task_status !== undefined) {
         if (!TASK_STATUSES.includes(opts.task_status)) throw new UsageError('status tugas tidak valid. Pilih: ' + TASK_STATUSES.join(' | '));
-        if (opts.task === undefined) throw new UsageError('--task-status butuh --task');
+        if (!hasTask) throw new UsageError('--task-status butuh --task');
         b.task_status = opts.task_status;
       }
-      for (const k of ['activity', 'task', 'log']) {
+      if (opts.task_id !== undefined) b.task_id = String(opts.task_id);
+      if (opts.task_event !== undefined) {
+        if (!REPORT_TASK_EVENTS.includes(opts.task_event)) throw new UsageError('--task-event: ' + REPORT_TASK_EVENTS.join(' | '));
+        if (!hasTask) throw new UsageError('--task-event butuh --task atau --task-id');
+        b.task_event = opts.task_event;
+      }
+      if (opts.task_note !== undefined && !hasTask) throw new UsageError('--task-note butuh --task atau --task-id');
+      for (const k of ['activity', 'task', 'log', 'task_note']) {
         if (opts[k] === undefined) continue;
         const why = sensitiveReason(opts[k]);
-        if (why) throw new UsageError(`--${k} ditolak: ${why}. Teks ini tampil publik di website kantor.`);
+        if (why) throw new UsageError(`--${k.replace(/_/g, '-')} ditolak: ${why}. Teks ini tampil publik (website kantor / grup log).`);
         b[k] = opts[k];
       }
       if (Object.keys(b).length === 2) throw new UsageError('report butuh minimal satu dari --status/--location/--activity/--task/--log');
@@ -167,9 +190,29 @@ export function buildRequest(parsed, { env = process.env, readText } = {}) {
     case 'claim':
     case 'done':
     case 'fail': {
+      if (opts.task !== undefined || opts.task_id !== undefined) {
+        const ev = { claim: 'start', done: 'done', fail: 'fail' }[cmd];
+        return taskBody(ev, needBot(), opts, opts.inbox ?? opts.id ?? pos[0]);
+      }
       const b = { action: cmd, inbox_id: int(opts.inbox ?? opts.id ?? pos[0], 'inbox_id (posisional atau --inbox)') };
       if (bot) b.bot = needBot();
       if (opts.note !== undefined) b.note = opts.note;
+      return b;
+    }
+    case 'task': {
+      const ev = pos[0] ?? opts.event;
+      if (!TASK_EVENTS.includes(ev)) throw new UsageError('task butuh event: ' + TASK_EVENTS.join(' | '));
+      return taskBody(ev, needBot(), opts, opts.inbox);
+    }
+    case 'log': {
+      const b = { action: 'log', bot: needBot() };
+      const text = opts.text ?? (pos.length ? pos.join(' ') : undefined);
+      if (!text || !String(text).trim()) throw new UsageError('--text wajib');
+      const why = sensitiveReason(text);
+      if (why) throw new UsageError(`--text ditolak: ${why}.`);
+      b.text = String(text);
+      if (opts.task !== undefined) b.task = String(opts.task);
+      if (opts.task_id !== undefined) b.task_id = String(opts.task_id);
       return b;
     }
     case 'chats':
@@ -177,6 +220,28 @@ export function buildRequest(parsed, { env = process.env, readText } = {}) {
     case 'ping':
       return bot ? { action: 'ping', bot: needBot() } : { action: 'ping' };
   }
+}
+
+function taskBody(event, bot, opts, inbox) {
+  const b = { action: 'task', bot, event };
+  const title = opts.title ?? opts.task;
+  if (title !== undefined) b.title = String(title);
+  if (opts.task_id !== undefined) b.task_id = String(opts.task_id);
+  if (b.title === undefined && b.task_id === undefined) throw new UsageError('--title/--task (judul tugas) atau --task-id wajib');
+  if (event === 'new' && b.title === undefined) throw new UsageError('task new butuh --title');
+  if (opts.agent !== undefined) {
+    if (!AGENTS.includes(opts.agent)) throw new UsageError(`agent "${opts.agent}" tidak valid. Pilihan: ${AGENTS.join(', ')}`);
+    if (event !== 'new') throw new UsageError('--agent hanya untuk task new');
+    b.agent = opts.agent;
+  }
+  for (const k of ['title', 'note']) {
+    const v = k === 'title' ? b.title : opts.note;
+    const why = sensitiveReason(v);
+    if (why) throw new UsageError(`--${k} ditolak: ${why}. Teks ini tampil publik (website kantor / grup log).`);
+  }
+  if (opts.note !== undefined) b.note = String(opts.note);
+  if (inbox !== undefined) b.inbox_id = int(inbox, '--inbox');
+  return b;
 }
 
 /** Baca BRIDGE_KEY dari env atau ~/.config/achphoria/bridge_key. Tidak pernah dicetak. */
