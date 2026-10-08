@@ -264,7 +264,7 @@ Lima bot Telegram (`@ach_chief_bot`, `@ach_research_bot`, `@ach_ops_bot`, `@ach_
 - **Masuk:** Telegram → `POST …/functions/v1/ach-bridge/tg/<id>` (dicek dengan header `X-Telegram-Bot-Api-Secret-Token`). Hanya user di allowlist `ach_tg_allow` yang dilayani; user lain dibalas sekali dengan sopan. Pesan dicatat di `ach_inbox`, lalu asisten dibangunkan lewat `WAKE_URL_<ID>` (opsional; tanpa itu pesan tetap tersimpan).
 - **Perintah cepat:** `/status`, `/tugas [id]`, `/help` dijawab langsung oleh bridge.
 - **Grup ACHPHORIA HQ:** bot hanya menanggapi mention, balasan ke pesannya, atau `/cmd@bot`. Chief adalah penerima default untuk pesan owner lainnya. Matikan *Group Privacy* di @BotFather minimal untuk chief.
-- **Keluar & laporan:** asisten memakai `node tools/ach.mjs` (`send`, `inbox`, `claim`, `done`, `fail`, `report`, `task`, `log`, `chats`) dengan `BRIDGE_KEY` (`~/.config/achphoria/bridge_key`), jadi tidak butuh service_role key. `report` memanggil `ach_report_activity` dan menolak nominal `Rp`/nomor telepon.
+- **Keluar & laporan:** asisten memakai `node tools/ach.mjs` (`send`, `inbox`, `claim`, `done`, `fail`, `report`, `task`, `log`, `chats`, `erp`, `erp-schema`) dengan `BRIDGE_KEY` (`~/.config/achphoria/bridge_key`), jadi tidak butuh service_role key. `report` memanggil `ach_report_activity` dan menolak nominal `Rp`/nomor telepon.
 - **Grup ACHPHORIA LOGS (v4):** feed update tugas otomatis. Owner kirim `/start` atau `/logs` di grup yang judulnya mengandung "LOGS" (atau `/setlogs` di grup mana pun) → grup ditandai `ach_tg_chats.role = 'logs'` dan Chief mengonfirmasi. Setiap event tugas lewat `report`/`task` diposting bridge sendiri: tugas baru = pesan induk 📋 oleh bot Chief, lalu 🔄 mulai / ✅ selesai / ❌ gagal / ⏳ nunggu approval sebagai balasan berutas dari bot divisi (id pesan induk di `ach_tg_logmsg`). Grup ini feed saja: pesan biasa diabaikan. Gagal posting tidak menggagalkan laporan. Catatan bebas: `node tools/ach.mjs log --bot <id> --text "…" [--task "…"]`.
 - **Daftar owner:** kirim `/start <TG_CLAIM_CODE>` lewat chat pribadi ke salah satu bot. Kodenya ada di `~/.config/achphoria/bridge.env`. Setelah itu kirim `/start` ke bot-bot lain.
 
@@ -272,6 +272,7 @@ Lima bot Telegram (`@ach_chief_bot`, `@ach_research_bot`, `@ach_ops_bot`, `@ach_
 |---|---|
 | `supabase/migrate-v3-telegram.sql` | tabel privat `ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats` (RLS tanpa policy, idempotent, hanya `ach_*`) |
 | `supabase/migrate-v4-logs.sql` | kolom `ach_tg_chats.role` + tabel privat `ach_tg_logmsg` (pesan induk per tugas); otomatis menandai grup "ACHPHORIA LOGS" yang sudah tercatat |
+| `supabase/migrate-v5-erp-read.sql` | akses BACA ERP SEMAR: role `ach_erp_reader` (allowlist SELECT), `ach_erp.run` + RPC `ach_erp_query`/`ach_erp_schema` (hanya service_role), audit privat `ach_erp_audit` |
 | `supabase/functions/ach-bridge/` | Edge Function (Deno, tanpa dependensi), `verify_jwt = false` di `supabase/config.toml` |
 | `tools/ach.mjs` | CLI asisten (Node 18+) |
 | `tools/deploy-bridge.sh` | migrasi + secrets + deploy + health check (butuh `SUPABASE_ACCESS_TOKEN`) |
@@ -287,9 +288,49 @@ tools/setup-telegram.sh --info             # cek webhook kelima bot
 
 Secret fungsi: `TG_TOKEN_<ID>`, `TG_WEBHOOK_SECRET`, `TG_CLAIM_CODE`, `BRIDGE_KEY`, dan opsional `WAKE_URL_<ID>`, `WAKE_KEY_<ID>`, `WAKE_KEY_HEADER` (default `Authorization`), `WAKE_KEY_STYLE` (`bearer` default, `raw`, `query`, atau `none`), `WAKE_KEY_PARAM`, `TG_USERNAME_<ID>`, `WAKE_FAIL_NOTICE=0`.
 
+## Akses baca ERP (v5)
+
+Bot **Ops & Data** (`@ach_ops_bot`) bisa menjawab pertanyaan data owner dari database **ERP SEMAR** (project Supabase yang sama,
+tabel `pos_*`, `inv_*`, `pur_*`, `sal_*`, `fin_*`, `crm_*`, `mst_*`, sebagian `sys_*`) **tanpa bisa menulis apa pun**.
+
+- **Cara kerja:** `tools/ach.mjs erp …` → `ach-bridge` action `erp_query` / `erp_schema` (hanya agen `ops` + `chief`) → RPC
+  `ach_erp_query` / `ach_erp_schema` (EXECUTE hanya `service_role`) → `ach_erp.run` (SECURITY DEFINER yang **dimiliki role
+  `ach_erp_reader`**, schema privat `ach_erp`). Query jalan sebagai `ach_erp_reader`: role NOLOGIN, BYPASSRLS (baris ERP terlihat
+  tanpa mengubah policy RLS ERP), dan hanya punya **SELECT** pada allowlist tabel/kolom. Transaksi dipaksa read-only, header/JWT
+  PostgREST dikosongkan, maks 200 baris, batas waktu 8 detik (statement_timeout role PostgREST).
+- **Validasi SQL:** satu `SELECT`/`WITH` saja; tanpa komentar, `;` tengah, `$…$`, `"…"`, string `E'…'`; tanpa kata kunci DML/DDL/locking;
+  tanpa `pg_*`, `information_schema`, schema lain, tabel `ach_*`; hanya fungsi dari allowlist (agregat, tanggal, string, json umum).
+- **Dikecualikan:** `sys_users`, `sys_user_invitations`, `sys_user_context`, `sys_user_brands`, `sys_user_outlets`, `sys_group_members`,
+  `sys_roles`, `sys_platform_admins`, `sys_payment_gateways`, `sys_payment_gateway_secrets`, `inv_recipe_access`, tabel legacy/aplikasi lain
+  (`hive_*`, `ac_*`, `cogs`, `journal`, `recap`, `stock_list`, `stock_movement`, `pos_config`, `v_hive_cogs_adjusted`), semua `ach_*`,
+  dan semua schema selain `public` (`auth`, `storage`, `vault`, …).
+- **Per kolom** (kolom ini TIDAK bisa dibaca): `crm_customers` (phone, email, birth_date, note), `pos_orders` (customer_name),
+  `pur_suppliers` (contact_name, phone, email, address), `sal_customers` (contact_name, phone, email, address, tax_number, notes),
+  `sal_sales_orders` (shipping_address), `sys_companies` (tax_number, phone, email, address), `sys_outlets` (address, phone),
+  `inv_warehouses` (address), `mst_tables` (qr_token), `pos_payments`/`pos_settlements`/`sal_payments`/`fin_supplier_payments`
+  (reference_number), `pos_payment_requests` (ref_no, payment_id, trans_id, auth_code, error_desc, raw_response),
+  `sys_activity_logs` (changes), `sys_approval_requests` (payload, result).
+- **Audit:** `ach_erp_audit` (privat, RLS tanpa policy) mencatat agen, SQL, jumlah baris, durasi, dan error — tidak menyimpan hasil.
+- **Filter angka Telegram:** teks `send` memang tidak difilter. Caption file dari bot ops ke chat owner (chat pribadi / grup "ACHPHORIA HQ")
+  boleh memuat nominal `Rp`; deretan ≥12 digit, pola kartu, dan nomor HP tetap ditolak. `report`/`log`/`task` (publik) tetap ketat.
+
+```bash
+node tools/ach.mjs erp-schema --bot ops [--table pos_orders]
+node tools/ach.mjs erp --bot ops --sql "select o.name as outlet, count(*) as orders, sum(p.grand_total) as total
+  from pos_orders p join sys_outlets o on o.id = p.outlet_id
+  where p.status = 'paid' and p.business_date = (now() at time zone 'Asia/Jakarta')::date
+  group by o.name order by total desc"
+node tools/ach.mjs erp --bot ops --sql "select warehouse_name, item_name, quantity, min_stock from rpt_stock_balances where is_low_stock" --limit 100
+```
+
+Contoh lain (penjualan per metode bayar, stok menipis `inv_stocks` vs `inv_item_stock_levels`, menu terlaris) ada di
+`docs/AGENT-GUIDE.md` bagian 3c. Migrasi: `supabase/migrate-v5-erp-read.sql` (idempotent; hanya membuat objek `ach_*` + role
+`ach_erp_reader`; tabel/policy ERP tidak diubah selain GRANT SELECT ke role itu).
+
 ## Keamanan
 
 - Website hanya memakai **publishable/anon key** dan hanya bisa **membaca** (RLS + grant SELECT).
 - Penulisan hanya lewat **service_role/secret key**, baik langsung ke tabel maupun lewat `ach_report_activity` yang EXECUTE-nya sudah dicabut dari `public`, `anon`, dan `authenticated`.
 - ⚠️ **Jangan pernah** commit secret key ke repo ini atau menaruhnya di `config.js`.
-- Tabel jembatan Telegram (`ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats`, `ach_tg_logmsg`) **privat**: RLS aktif tanpa policy, grant anon/authenticated dicabut, tidak masuk realtime. Token bot, `BRIDGE_KEY`, dan kode klaim hanya ada di Supabase secrets & `~/.config/achphoria/bridge.env` (chmod 600).
+- Tabel jembatan Telegram (`ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats`, `ach_tg_logmsg`, `ach_erp_audit`) **privat**: RLS aktif tanpa policy, grant anon/authenticated dicabut, tidak masuk realtime. Token bot, `BRIDGE_KEY`, dan kode klaim hanya ada di Supabase secrets & `~/.config/achphoria/bridge.env` (chmod 600).
+- Akses ERP (v5) read-only lewat role `ach_erp_reader` (NOLOGIN, hanya SELECT allowlist); fungsi ERP tidak bisa dipanggil anon/authenticated. Lihat "Akses baca ERP (v5)".

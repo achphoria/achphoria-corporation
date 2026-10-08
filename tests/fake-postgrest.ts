@@ -3,12 +3,24 @@
 type Row = Record<string, any>;
 /* ---------------- fake PostgREST ---------------- */
 export class FakeDb {
-  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [], ach_tg_logmsg: [] };
-  seq: Record<string, number> = { ach_inbox: 0, ach_outbox: 0 };
+  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [], ach_tg_logmsg: [], ach_erp_audit: [] };
+  seq: Record<string, number> = { ach_inbox: 0, ach_outbox: 0, ach_erp_audit: 0 };
   rpc: Row[] = [];
+  /** Panggilan RPC ERP (v5) + jawaban tiruan: fungsi (body) → {status, json}. */
+  erpCalls: { fn: string; body: Row }[] = [];
+  erp: Record<string, (b: Row) => { status: number; json: unknown }> = {
+    ach_erp_query: (b) => ({ status: 200, json: { columns: ['n'], rows: [{ n: 3 }], row_count: 1, truncated: false, max_rows: b.p_max_rows } }),
+    ach_erp_schema: () => ({ status: 200, json: [{ table: 'pos_orders', kind: 'table', restricted: true, columns: [{ name: 'id', type: 'uuid' }] }] }),
+  };
   keys: Record<string, string[]> = { ach_inbox: ['bot', 'update_id'], ach_tg_allow: ['from_id'], ach_tg_chats: ['bot', 'chat_id'], ach_tg_logmsg: ['task_id', 'chat_id'] };
   handle(url: URL, method: string, prefer: string, body: unknown): Response {
     const path = url.pathname.replace(/^\/rest\/v1\//, '');
+    if (path.startsWith('rpc/ach_erp_')) {
+      const fn = path.slice(4);
+      this.erpCalls.push({ fn, body: body as Row });
+      const r = this.erp[fn]?.(body as Row) ?? { status: 404, json: { message: 'function not found' } };
+      return Response.json(r.json, { status: r.status });
+    }
     if (path.startsWith('rpc/')) return this.reportActivity(body as Row);
     const t = this.tables[path];
     if (path === 'ach_tasks') for (const r of t) r.id ??= crypto.randomUUID();

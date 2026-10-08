@@ -53,7 +53,7 @@ const pm = (id: number, text: string) => ({ update_id: id, message: { message_id
 const cli = async (...args: string[]) => {
   const out = await new Deno.Command('node', { args: ['tools/ach.mjs', ...args], env: { ACH_BRIDGE_URL: base, ACH_BRIDGE_KEY: secrets.BRIDGE_KEY, HOME: '/nonexistent' } }).output();
   const txt = new TextDecoder().decode(out.stdout);
-  return { code: out.code, json: txt.trim().startsWith('{') ? JSON.parse(txt) : null, err: new TextDecoder().decode(out.stderr) };
+  return { code: out.code, out: txt, json: txt.trim().startsWith('{') ? JSON.parse(txt) : null, err: new TextDecoder().decode(out.stderr) };
 };
 
 try {
@@ -106,6 +106,14 @@ try {
   const tl = await cli('log', '--bot', 'research', '--text', 'catatan tambahan', '--task', 'Tes grup log');
   check('LOGS: log --task → 📝 berutas', tl.code === 0 && tg.at(-1)!.body.text === '📝 Research: catatan tambahan' && rp(tg.at(-1)!.body.reply_parameters) === rootId);
   check('LOGS: log Rp ditolak CLI', (await cli('log', '--bot', 'research', '--text', 'bayar Rp 5.000')).code === 1);
+
+  // v5: akses baca ERP (RPC tiruan)
+  const eq1 = await cli('erp', '--bot', 'ops', '--sql', 'select count(*) n from pos_orders');
+  check('ERP: erp --bot ops → tabel ringkas', eq1.code === 0 && /^n\n─\n3\n\(1 baris/.test(eq1.out) && db.erpCalls.at(-1)?.fn === 'ach_erp_query');
+  check('ERP: audit tercatat tanpa hasil', db.tables.ach_erp_audit.at(-1)?.agent === 'ops' && db.tables.ach_erp_audit.at(-1)?.row_count === 1);
+  const es = await cli('erp-schema', '--bot', 'ops');
+  check('ERP: erp-schema', es.code === 0 && /pos_orders \*: id/.test(es.out));
+  check('ERP: research ditolak (exit 2)', (await cli('erp', '--bot', 'research', '--sql', 'select 1')).code === 2);
 
   const all = logs.join('') + JSON.stringify(db.tables);
   check('tidak ada rahasia di log/DB', !Object.values(secrets).some((v) => all.includes(v)) && !all.includes('e2e-wake-key') && !all.includes('AAe2eToken'));

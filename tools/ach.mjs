@@ -24,6 +24,9 @@
  *   node tools/ach.mjs claim --bot research --task "Tes grup log" [--inbox 12] --note "mulai cek sumber"
  *   node tools/ach.mjs done  --bot research --task "Tes grup log" [--inbox 12] --note "ringkasan dikirim"
  *   node tools/ach.mjs log   --bot research --text "progres 50%" [--task "Tes grup log" | --task-id 1a2b3c4d]
+ *   v5 akses BACA ERP SEMAR (hanya --bot ops / chief):
+ *   node tools/ach.mjs erp-schema --bot ops [--table pos_orders] [--json]
+ *   node tools/ach.mjs erp --bot ops --sql "select count(*) from pos_orders" [--limit 50] [--json]
  */
 import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -39,7 +42,8 @@ export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal', 'semua'];
 export const TASK_EVENTS = ['new', 'start', 'done', 'fail', 'approval'];
 const REPORT_TASK_EVENTS = ['gagal', 'approval'];
 const BOOL_FLAGS = new Set(['html', 'silent', 'full', 'json', 'dry_run', 'help']);
-const COMMANDS = ['report', 'send', 'send-photo', 'send-file', 'typing', 'inbox', 'claim', 'done', 'fail', 'task', 'log', 'chats', 'ping'];
+const COMMANDS = ['report', 'send', 'send-photo', 'send-file', 'typing', 'inbox', 'claim', 'done', 'fail', 'task', 'log', 'chats', 'erp', 'erp-schema', 'ping'];
+export const ERP_MAX_ROWS = 200;
 
 export const HELP = `ACHPHORIA · CLI jembatan Telegram (ach-bridge)
 
@@ -66,6 +70,10 @@ Pemakaian: node tools/ach.mjs <perintah> [opsi]
   log     --bot <id> --text <teks> [--task <judul> | --task-id <id>]
           posting bebas ke grup ACHPHORIA LOGS sebagai bot sendiri (berutas di bawah tugas)
   chats   --bot <id>                       chat yang dikenal bot (mis. grup HQ)
+  erp-schema --bot ops|chief [--table <nama>] [--json]
+          tabel/view ERP SEMAR yang boleh dibaca + kolomnya (* = sebagian kolom saja)
+  erp     --bot ops|chief (--sql "select …" | --sql-file <path> | --sql - [stdin]) [--limit N (1–200, default 50)] [--json]
+          SATU SELECT/WITH read-only ke ERP SEMAR; hasil tabel ringkas (atau --json). Dicatat di audit.
   ping    [--bot <id>]                     cek koneksi & konfigurasi (tanpa membuka rahasia)
 
 Opsi umum: --dry-run (cetak payload, tidak mengirim) · --url <bridge-url>
@@ -120,6 +128,16 @@ export function parseArgs(argv) {
     } else pos.push(a);
   }
   return { cmd: pos[0], pos: pos.slice(1), opts };
+}
+
+/** Filter longgar (sama dengan server) untuk caption bot ops: nominal Rp boleh; ≥12 digit / pola kartu / nomor HP ditolak.
+ *  Server memakai versi longgar ini HANYA bila chat tujuan milik owner (chat pribadi / grup HQ). */
+export function opsAmountReason(s) {
+  if (!s) return null;
+  if (/\d{12,}/.test(s)) return 'mengandung deretan angka sangat panjang (≥12 digit)';
+  if (/\b\d{4}[ -]\d{4}[ -]\d{4}\b/.test(s)) return 'mengandung pola nomor kartu';
+  if (/(?:\+62|\b62|\b0)[\s.-]?8\d{1,3}[\s.-]?\d{3,4}[\s.-]?\d{3,5}\b/.test(s)) return 'mengandung pola nomor telepon';
+  return null;
 }
 
 /** Pola sensitif (sama dengan server): nominal Rp/IDR, ≥9 digit berurutan, pola nomor HP. */
@@ -213,7 +231,7 @@ export function buildRequest(parsed, { env = process.env, readText, readFile } =
       checkLocalFile(String(file), bytes, mode);
       b.filename = basename(String(file));
       if (opts.caption !== undefined) {
-        const why = sensitiveReason(opts.caption);
+        const why = b.bot === 'ops' ? opsAmountReason(opts.caption) : sensitiveReason(opts.caption);
         if (why) throw new UsageError(`--caption ditolak: ${why}.`);
         if (String(opts.caption).length > 1024) throw new UsageError('--caption maks 1024 karakter');
         b.caption = String(opts.caption);
@@ -268,9 +286,68 @@ export function buildRequest(parsed, { env = process.env, readText, readFile } =
     }
     case 'chats':
       return { action: 'chats', bot: needBot() };
+    case 'erp': {
+      const b = { action: 'erp_query', bot: needBot() };
+      let q = opts.sql;
+      if (opts.sql_file !== undefined) {
+        if (!readText) throw new UsageError('--sql-file tidak didukung di sini');
+        q = readText(opts.sql_file);
+      } else if (q === '-') {
+        if (!readText) throw new UsageError('stdin tidak didukung di sini');
+        q = readText('-');
+      }
+      if (q === undefined && pos.length) q = pos.join(' ');
+      if (!q || q === true || !String(q).trim()) throw new UsageError('--sql "select …" wajib (atau --sql-file <path> / --sql - untuk stdin)');
+      b.sql = String(q).trim();
+      const lim = optInt(opts.limit, '--limit');
+      if (lim !== undefined) {
+        if (lim < 1 || lim > ERP_MAX_ROWS) throw new UsageError(`--limit harus 1–${ERP_MAX_ROWS}`);
+        b.limit = lim;
+      }
+      return b;
+    }
+    case 'erp-schema': {
+      const b = { action: 'erp_schema', bot: needBot() };
+      const t = opts.table ?? pos[0];
+      if (t !== undefined && t !== true) b.table = String(t);
+      return b;
+    }
     case 'ping':
       return bot ? { action: 'ping', bot: needBot() } : { action: 'ping' };
   }
+}
+
+/* ---------- format keluaran ERP ---------- */
+const cell = (v) => {
+  if (v === null || v === undefined) return '∅';
+  const t = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  const one = t.replace(/\s+/g, ' ');
+  return one.length > 60 ? one.slice(0, 59) + '…' : one;
+};
+/** Tabel teks ringkas dari {columns, rows}. Angka rata kanan, apa adanya (tanpa pemisah ribuan). */
+export function formatRows(columns, rows) {
+  const cols = columns?.length ? columns : rows?.length ? Object.keys(rows[0]) : [];
+  if (!cols.length) return '(0 baris)';
+  const data = (rows ?? []).map((r) => cols.map((c) => cell(r[c])));
+  const num = cols.map((c) => (rows ?? []).length > 0 && rows.every((r) => r[c] === null || typeof r[c] === 'number'));
+  const w = cols.map((c, i) => Math.max(c.length, ...data.map((d) => d[i].length)));
+  const line = (vals) => vals.map((v, i) => (num[i] ? v.padStart(w[i]) : v.padEnd(w[i]))).join(' │ ').trimEnd();
+  return [line(cols), w.map((n) => '─'.repeat(n)).join('─┼─'), ...data.map(line)].join('\n');
+}
+export function formatErp(action, data, req = {}) {
+  if (action === 'erp_query') {
+    const foot = `(${data.row_count ?? 0} baris${data.truncated ? `, terpotong di ${data.max_rows} — persempit query / naikkan --limit (maks ${ERP_MAX_ROWS})` : ''} · ${data.ms ?? '?'} ms)`;
+    return (data.row_count ? formatRows(data.columns, data.rows) + '\n' : '') + foot;
+  }
+  const tables = data.tables ?? [];
+  if (req.table && tables.length === 1) {
+    const t = tables[0];
+    const w = Math.max(...t.columns.map((c) => c.name.length));
+    return [`${t.table} (${t.kind}${t.restricted ? ', sebagian kolom — SELECT * ditolak' : ''})${t.comment ? ' — ' + t.comment : ''}`,
+      ...t.columns.map((c) => `  ${c.name.padEnd(w)}  ${c.type}`)].join('\n');
+  }
+  return [...tables.map((t) => `${t.table}${t.kind === 'view' ? ' [view]' : ''}${t.restricted ? ' *' : ''}: ${t.columns.map((c) => c.name).join(', ')}`),
+    '', `${tables.length} tabel/view · * = hanya kolom tertera (SELECT * ditolak) · tipe kolom: erp-schema --table <nama>`].join('\n');
 }
 
 function taskBody(event, bot, opts, inbox) {
@@ -358,7 +435,9 @@ export async function main(argv = process.argv.slice(2), { env = process.env, fe
   }
   let data;
   try { data = JSON.parse(text); } catch { data = { ok: false, error: text.slice(0, 500) }; }
-  out(JSON.stringify(data, null, 2));
+  const erp = body.action === 'erp_query' || body.action === 'erp_schema';
+  if (erp && res.ok && data?.ok && !parsed.opts.json) out(formatErp(body.action, data, body));
+  else out(JSON.stringify(data, null, 2));
   if (!res.ok || data?.ok === false) {
     err(`✖ HTTP ${res.status}${data?.error ? ': ' + data.error : ''}`);
     return 2;
