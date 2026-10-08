@@ -1,3 +1,4 @@
+import { createFx } from './fx.ts';
 /**
  * ACHPHORIA CORPORATION · ach-bridge — logika Edge Function (Deno, tanpa dependensi)
  *
@@ -31,7 +32,7 @@ export const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'w
 export const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'] as const;
 export const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'] as const;
 export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal'] as const;
-export const VERSION = 'v5.0.0';
+export const VERSION = 'v6.0.0';
 export const TASK_EVENTS = ['gagal', 'approval'] as const;
 /** Agen yang boleh membaca ERP (erp_query / erp_schema). */
 export const ERP_AGENTS: readonly AgentId[] = ['ops', 'chief'];
@@ -287,7 +288,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
 
   /* ---------- redaksi rahasia ---------- */
   const SECRET_NAMES = [
-    'TG_WEBHOOK_SECRET', 'TG_CLAIM_CODE', 'BRIDGE_KEY', 'ACH_SERVICE_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
+    'TG_WEBHOOK_SECRET', 'TG_CLAIM_CODE', 'BRIDGE_KEY', 'FX_DEVICE_KEY', 'ACH_SERVICE_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
     ...AGENTS.flatMap((a) => ['TG_TOKEN_' + UP(a), 'WAKE_KEY_' + UP(a)]),
   ];
   function redact(s: unknown): string {
@@ -1207,6 +1208,8 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
   }
 
+  const handleFx = createFx({ db, env, now, safeEqual });
+
   async function handleApi(req: Request): Promise<Response> {
     if (req.method !== 'POST') return json({ ok: false, error: 'pakai POST' }, 405);
     const key = env('BRIDGE_KEY');
@@ -1236,6 +1239,7 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
       if (route === 'health') return json({ ok: true, service: 'ach-bridge', version: VERSION });
       if (route === 'tg') return await handleTelegram(req, bot.toLowerCase());
       if (route === 'api') return await handleApi(req);
+      if (route === 'fx') return await handleFx(req, rest.slice(1), url);
       return json({ ok: false, error: 'not found' }, 404);
     } catch (e) {
       warn('unhandled:', redact(e));

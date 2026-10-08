@@ -3,8 +3,8 @@
 type Row = Record<string, any>;
 /* ---------------- fake PostgREST ---------------- */
 export class FakeDb {
-  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [], ach_tg_logmsg: [], ach_erp_audit: [] };
-  seq: Record<string, number> = { ach_inbox: 0, ach_outbox: 0, ach_erp_audit: 0 };
+  tables: Record<string, Row[]> = { ach_inbox: [], ach_outbox: [], ach_tg_allow: [], ach_tg_chats: [], ach_agents: [], ach_tasks: [], ach_tg_logmsg: [], ach_erp_audit: [], ach_fx_state: [], ach_fx_commands: [], ach_fx_journal: [] };
+  seq: Record<string, number> = { ach_inbox: 0, ach_outbox: 0, ach_erp_audit: 0, ach_fx_journal: 0 };
   rpc: Row[] = [];
   /** Panggilan RPC ERP (v5) + jawaban tiruan: fungsi (body) → {status, json}. */
   erpCalls: { fn: string; body: Row }[] = [];
@@ -12,7 +12,7 @@ export class FakeDb {
     ach_erp_query: (b) => ({ status: 200, json: { columns: ['n'], rows: [{ n: 3 }], row_count: 1, truncated: false, max_rows: b.p_max_rows } }),
     ach_erp_schema: () => ({ status: 200, json: [{ table: 'pos_orders', kind: 'table', restricted: true, columns: [{ name: 'id', type: 'uuid' }] }] }),
   };
-  keys: Record<string, string[]> = { ach_inbox: ['bot', 'update_id'], ach_tg_allow: ['from_id'], ach_tg_chats: ['bot', 'chat_id'], ach_tg_logmsg: ['task_id', 'chat_id'] };
+  keys: Record<string, string[]> = { ach_inbox: ['bot', 'update_id'], ach_tg_allow: ['from_id'], ach_tg_chats: ['bot', 'chat_id'], ach_tg_logmsg: ['task_id', 'chat_id'], ach_fx_state: ['device_id'] };
   handle(url: URL, method: string, prefer: string, body: unknown): Response {
     const path = url.pathname.replace(/^\/rest\/v1\//, '');
     if (path.startsWith('rpc/ach_erp_')) {
@@ -38,6 +38,9 @@ export class FakeDb {
       const val = r[k] === null || r[k] === undefined ? 'null' : String(r[k]);
       if (v.startsWith('eq.')) return val === decodeURIComponent(v.slice(3));
       if (v === 'is.null') return val === 'null';
+      if (v.startsWith('gt.')) return val > decodeURIComponent(v.slice(3));
+      if (v.startsWith('gte.')) return val >= decodeURIComponent(v.slice(4));
+      if (v.startsWith('lte.')) return val <= decodeURIComponent(v.slice(4));
       if (v.startsWith('in.(')) return v.slice(4, -1).split(',').map((s) => s.replace(/^"|"$/g, '')).includes(val);
       throw new Error('filter tak didukung: ' + v);
     });
@@ -62,6 +65,7 @@ export class FakeDb {
           else return Response.json({ message: 'duplicate key' }, { status: 409 });
         } else {
           const row: Row = { ...it };
+          if (path === 'ach_fx_commands') row.id ??= crypto.randomUUID();
           if (path in this.seq) row.id = ++this.seq[path];
           row.created_at ??= new Date().toISOString();
           if (path === 'ach_inbox') row.status ??= 'baru';

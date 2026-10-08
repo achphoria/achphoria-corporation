@@ -105,7 +105,7 @@ Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async 
 Deno.test('health & routing', async () => {
   const s = setup();
   const r = await s.handler(new Request('http://localhost/ach-bridge/health'));
-  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v5.0.0' });
+  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v6.0.0' });
   eq((await s.handler(new Request('http://localhost/ach-bridge?action=health'))).status, 200);
   eq((await s.handler(new Request('http://localhost/ach-bridge/nope', { method: 'POST' }))).status, 404);
 });
@@ -716,4 +716,91 @@ Deno.test('v5 caption: ops → chat owner boleh nominal Rp, tetap tolak ≥12 di
   // bot lain ke chat owner tetap ketat
   await s.tgPost('research', s.priv('halo'));
   eq((await send('research', 'Penjualan Rp 1.250.000')).status, 400);
+});
+
+// ===================== v6 FX =====================
+Deno.test('fx: auth terpisah (x-fx-key untuk PC, x-ach-key untuk AI)', async () => {
+  const { handler, env } = setup({ FX_DEVICE_KEY: 'fxkey-0123456789abcdef' });
+  const post = (path: string, body: Row, headers: Row) => handler(new Request('http://localhost/functions/v1/ach-bridge' + path, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
+  const get = (path: string, headers: Row) => handler(new Request('http://localhost/functions/v1/ach-bridge' + path, { headers }));
+  // PC tanpa kunci -> 401
+  eq((await post('/fx/state', { device_id: 'pc1' }, {})).status, 401);
+  // kunci AI tidak boleh dipakai PC, dan sebaliknya
+  eq((await post('/fx/state', { device_id: 'pc1' }, { 'x-ach-key': env.BRIDGE_KEY })).status, 401);
+  eq((await get('/fx/state', { 'x-fx-key': env.FX_DEVICE_KEY })).status, 401);
+  // kunci benar lolos
+  const r = await (await post('/fx/state', { device_id: 'pc1', mode: 'ai', bot_running: true }, { 'x-fx-key': env.FX_DEVICE_KEY })).json();
+  assert(r.ok && r.device_id === 'pc1', JSON.stringify(r));
+  const g = await (await get('/fx/state?device=pc1', { 'x-ach-key': env.BRIDGE_KEY })).json();
+  assert(g.state && g.state.mode === 'ai' && g.state.bot_running === true);
+});
+
+Deno.test('fx: validasi perintah ketat', async () => {
+  const { handler, env } = setup({ FX_DEVICE_KEY: 'fxkey-0123456789abcdef' });
+  const cmd = (body: Row) => handler(new Request('http://localhost/functions/v1/ach-bridge/fx/command', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-ach-key': env.BRIDGE_KEY }, body: JSON.stringify(body) }));
+  const bad = async (body: Row, msg: string) => { const r = await cmd(body); eq(r.status, 400, msg + ' ' + await r.text()); };
+  await bad({ action: 'explode' }, 'action enum');
+  await bad({ action: 'open', symbol: 'EUR USD', side: 'buy', sl_price: 1.1, risk_percent: 1 }, 'symbol');
+  await bad({ action: 'open', symbol: 'EURUSD', side: 'long', sl_price: 1.1, risk_percent: 1 }, 'side');
+  await bad({ action: 'open', symbol: 'EURUSD', side: 'buy', risk_percent: 1 }, 'sl wajib');
+  await bad({ action: 'open', symbol: 'EURUSD', side: 'buy', sl_price: 1.1, risk_percent: 11 }, 'risk > 10');
+  await bad({ action: 'open', symbol: 'EURUSD', side: 'buy', sl_price: 1.1, risk_percent: 0 }, 'risk 0');
+  await bad({ action: 'open', symbol: 'EURUSD', side: 'buy', sl_price: 1.1, risk_percent: 1, order_type: 'limit' }, 'bukan market');
+  await bad({ action: 'close' }, 'close butuh tiket');
+  await bad({ action: 'set_watchlist', symbols: 'EURUSD,bad symbol' }, 'watchlist');
+  const ok = await (await cmd({ action: 'open', symbol: 'eurusd', side: 'BUY', sl: 1.115, tp: 1.123, risk: 10, reason: 'tes', timeframe: 'm15' })).json();
+  assert(ok.ok, JSON.stringify(ok));
+  eq(ok.command.symbol, 'EURUSD'); eq(ok.command.side, 'buy'); eq(ok.command.risk_percent, 10);
+  eq(ok.command.order_type, 'market'); eq(ok.command.status, 'pending'); eq(ok.command.timeframe, 'M15');
+  // modify / close cukup ticket (tanpa symbol); modify wajib SL
+  const m = await (await cmd({ action: 'modify', ticket: 100001, sl_price: 1.099, tp_price: 1.1015 })).json();
+  assert(m.ok, JSON.stringify(m));
+  await bad({ action: 'modify', ticket: 100001 }, 'modify tanpa SL');
+  const cl = await (await cmd({ action: 'close', ticket: 100001 })).json();
+  assert(cl.ok, JSON.stringify(cl));
+});
+
+Deno.test('fx: alur state -> command -> claim atomik -> result -> journal', async () => {
+  const { db, handler, env } = setup({ FX_DEVICE_KEY: 'fxkey-0123456789abcdef' });
+  const fx = (method: string, path: string, body?: Row, key: [string, string] = ['x-fx-key', env.FX_DEVICE_KEY]) =>
+    handler(new Request('http://localhost/functions/v1/ach-bridge' + path, {
+      method, headers: { 'content-type': 'application/json', [key[0]]: key[1] }, body: body ? JSON.stringify(body) : undefined }));
+  const ai: [string, string] = ['x-ach-key', env.BRIDGE_KEY];
+  // snapshot
+  const st = await (await fx('POST', '/fx/state', { device_id: 'mock', mode: 'ai', dry_run: true, account: { balance: 500000, currency: 'IDR' }, positions: [], symbols: { EURUSD: { bid: 1.1 } } })).json();
+  assert(st.ok);
+  // perintah
+  const c = await (await fx('POST', '/fx/command', { device_id: 'mock', action: 'open', symbol: 'EURUSD', side: 'buy', sl_price: 1.1, tp_price: 1.12, risk_percent: 2, reason: 'uji' }, ai)).json();
+  const id = c.command.id;
+  // PC lain tidak melihatnya
+  const other = await (await fx('GET', '/fx/commands?device=pc1')).json();
+  eq(other.commands.length, 0);
+  // claim: pending -> executing, sekali saja
+  const a = await (await fx('GET', '/fx/commands?device=mock')).json();
+  eq(a.commands.length, 1); eq(a.commands[0].status, 'executing'); eq(a.commands[0].id, id);
+  const b = await (await fx('GET', '/fx/commands?device=mock')).json();
+  eq(b.commands.length, 0, 'tidak di-claim dua kali');
+  // result dari device yang salah ditolak
+  eq((await fx('POST', `/fx/commands/${id}/result`, { device_id: 'pc1', status: 'done', result: {} })).status, 409);
+  const res = await (await fx('POST', `/fx/commands/${id}/result`, { device_id: 'mock', status: 'done', result: { ticket: 123, fill_price: 1.1001, lots: 0.03, dry_run: true } })).json();
+  assert(res.ok && res.command.status === 'done' && res.command.result.ticket === 123);
+  // result kedua ditolak (bukan executing lagi)
+  eq((await fx('POST', `/fx/commands/${id}/result`, { device_id: 'mock', status: 'done', result: {} })).status, 409);
+  // jurnal
+  const j = await (await fx('POST', '/fx/journal', { device_id: 'mock', events: [{ event: 'opened', ticket: 123, symbol: 'EURUSD', side: 'buy', lots: 0.03, price: 1.1001, profit: null }, { event: 'nyanyi' }] })).json();
+  assert(!j.ok, 'event tak dikenal ditolak');
+  const j2 = await (await fx('POST', '/fx/journal', { device_id: 'mock', event: 'closed', ticket: 123, symbol: 'EURUSD', profit: -32000 })).json();
+  assert(j2.ok && j2.count === 1);
+  const got = await (await fx('GET', '/fx/journal?device=mock&days=7', undefined, ai)).json();
+  eq(got.count, 1); eq(got.events[0].profit, -32000);
+  // recent untuk AI
+  const recent = await (await fx('GET', '/fx/commands?device=mock&recent=1', undefined, ai)).json();
+  eq(recent.commands.length, 1); eq(recent.commands[0].status, 'done');
+  // perintah kedaluwarsa tidak di-claim
+  db.tables.ach_fx_commands.push({ id: crypto.randomUUID(), device_id: 'mock', action: 'pause', status: 'pending', created_by: 'ai', created_at: '2000-01-01T00:00:00Z', expires_at: '2000-01-01T00:10:00Z' });
+  const exp = await (await fx('GET', '/fx/commands?device=mock')).json();
+  eq(exp.commands.length, 0, 'expired tidak dikirim');
+  eq(db.tables.ach_fx_commands.find((r) => r.action === 'pause')!.status, 'expired', 'ditandai expired');
 });

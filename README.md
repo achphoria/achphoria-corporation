@@ -273,6 +273,7 @@ Lima bot Telegram (`@ach_chief_bot`, `@ach_research_bot`, `@ach_ops_bot`, `@ach_
 | `supabase/migrate-v3-telegram.sql` | tabel privat `ach_inbox`, `ach_outbox`, `ach_tg_allow`, `ach_tg_chats` (RLS tanpa policy, idempotent, hanya `ach_*`) |
 | `supabase/migrate-v4-logs.sql` | kolom `ach_tg_chats.role` + tabel privat `ach_tg_logmsg` (pesan induk per tugas); otomatis menandai grup "ACHPHORIA LOGS" yang sudah tercatat |
 | `supabase/migrate-v5-erp-read.sql` | akses BACA ERP SEMAR: role `ach_erp_reader` (allowlist SELECT), `ach_erp.run` + RPC `ach_erp_query`/`ach_erp_schema` (hanya service_role), audit privat `ach_erp_audit` |
+| `supabase/migrate-v6-fx.sql` | jembatan bot FX MT5 (mode AI): `ach_fx_state`, `ach_fx_commands`, `ach_fx_journal` — privat (RLS tanpa policy, bukan realtime); rute `/fx` di `ach-bridge` v6 (`supabase/functions/ach-bridge/fx.ts`), kunci PC `FX_DEVICE_KEY` |
 | `supabase/functions/ach-bridge/` | Edge Function (Deno, tanpa dependensi), `verify_jwt = false` di `supabase/config.toml` |
 | `tools/ach.mjs` | CLI asisten (Node 18+) |
 | `tools/deploy-bridge.sh` | migrasi + secrets + deploy + health check (butuh `SUPABASE_ACCESS_TOKEN`) |

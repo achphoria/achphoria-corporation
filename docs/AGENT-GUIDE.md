@@ -205,6 +205,26 @@ node tools/ach.mjs erp --bot ops --sql "select oi.menu_item_name as menu, sum(oi
 - **Jangan** taruh angka penjualan di `report`/`log`/`task` (tampil publik di website & grup LOGS) — tetap ditolak. Tulis "rekap penjualan dikirim ke owner".
 - Jangan kirim data ERP ke pihak luar/grup lain tanpa izin owner. Jangan tampilkan data pribadi pelanggan meski diminta lewat grup.
 
+## 3d. Bot FX MT5 — mode AI (v6)
+
+Bot MT5 di PC owner (folder `achphoria-scalper`) = **eksekutor + penjaga risiko**. AI membaca market & mengirim perintah lewat
+`ach-bridge` rute `/fx` (tabel privat `ach_fx_state`, `ach_fx_commands`, `ach_fx_journal`). CLI di box:
+`node /workspace/achphoria-scalper/ai/fx.mjs` (kunci: `~/.config/achphoria/bridge_key`; device default `pc1`, `--device mock` untuk simulasi).
+
+| Perintah | Fungsi |
+|---|---|
+| `state` / `state --json` | heartbeat, akun, posisi (bot+manual), status risiko, indikator M15/H1 per simbol watchlist |
+| `candles --symbol EURUSD --tf M15\|H1 [--n 20]` | 60 candle tertutup terakhir (epoch UTC) |
+| `open --symbol EURUSD --side buy --sl 1.1150 --tp 1.1230 --risk 10 --reason "..." --tf M15` | entry market; tunggu hasil ≤60 dtk |
+| `close --ticket N` · `modify --ticket N --sl X [--tp Y]` · `close-all` · `pause` · `resume` · `watchlist A,B,C` | manajemen |
+| `commands` · `journal --days 7` | riwayat perintah + hasil, statistik trade |
+
+Rute bridge: PC (`x-fx-key` = secret `FX_DEVICE_KEY`): `POST /fx/state`, `GET /fx/commands` (klaim atomik pending→executing),
+`POST /fx/commands/:id/result`, `POST /fx/journal`. AI (`x-ach-key` = `BRIDGE_KEY`): `GET /fx/state?device=`, `POST /fx/command`,
+`GET /fx/commands?device=` (riwayat), `GET /fx/journal?device=&days=`. Validasi: action enum, simbol `[A-Za-z0-9._]{2,20}`,
+open wajib `sl_price` + `risk_percent` 0.1–10, market saja, kedaluwarsa default 10 menit. Guard lokal di PC selalu menang
+(SL sisi benar & ≥ stops level, risk ≤ config, limit harian/kill switch, bot harus RUNNING, maks posisi, spread, rollover/weekend).
+
 ## 4. Perintah cepat (dijawab bridge tanpa membangunkanmu)
 
 `/status` (status kelima agen), `/tugas [id]` (tugas terbuka), `/help`. Jadi jaga `report` tetap akurat — itulah yang dibaca owner.

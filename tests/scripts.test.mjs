@@ -74,20 +74,24 @@ test('deploy-bridge.sh (tanpa langkah CLI) + setup-telegram.sh terhadap server t
   assert.equal(statSync(conf).mode & 0o777, 0o700);
   assert.equal(statSync(join(conf, 'bridge.env')).mode & 0o777, 0o600);
   assert.equal(statSync(join(conf, 'bridge_key')).mode & 0o777, 0o600);
+  assert.equal(statSync(join(conf, 'fx_device_key')).mode & 0o777, 0o600);
   const file = Object.fromEntries(readFileSync(join(conf, 'bridge.env'), 'utf8').split('\n').filter((l) => /^[A-Z]/.test(l)).map((l) => l.split(/=(.*)/s).slice(0, 2)));
   assert.match(file.TG_WEBHOOK_SECRET, /^[0-9a-f]{64}$/);
   assert.match(file.BRIDGE_KEY, /^[0-9a-f]{64}$/);
   assert.match(file.TG_CLAIM_CODE, /^ACH-[0-9A-F]{10}$/);
+  assert.match(file.FX_DEVICE_KEY, /^[0-9a-f]{64}$/);
   assert.equal(readFileSync(join(conf, 'bridge_key'), 'utf8').trim(), file.BRIDGE_KEY);
+  assert.equal(readFileSync(join(conf, 'fx_device_key'), 'utf8').trim(), file.FX_DEVICE_KEY);
   assert.equal(Object.keys(file).some((k) => k.startsWith('TG_TOKEN')), false, 'token tidak ditulis ke file');
   // migrasi & secrets
   const q = calls.filter((c) => c.url.endsWith('/database/query'));
   assert.ok(q[0].body.query.includes('create table if not exists public.ach_inbox'));
   assert.ok(q.some((c) => c.body.query.includes('create table if not exists public.ach_tg_logmsg')), 'migrasi v4 dijalankan');
   assert.ok(q.some((c) => c.body.query.includes('create or replace function ach_erp.run')), 'migrasi v5 dijalankan');
+  assert.ok(q.some((c) => c.body.query.includes('create table if not exists public.ach_fx_state')), 'migrasi v6 dijalankan');
   const sec = calls.find((c) => c.url.endsWith('/secrets')).body;
   const names = sec.map((s) => s.name).sort();
-  assert.deepEqual(names, ['BRIDGE_KEY', 'TG_CLAIM_CODE', 'TG_TOKEN_CHIEF', 'TG_TOKEN_OPS', 'TG_WEBHOOK_SECRET', 'WAKE_KEY_OPS', 'WAKE_URL_OPS']);
+  assert.deepEqual(names, ['BRIDGE_KEY', 'FX_DEVICE_KEY', 'TG_CLAIM_CODE', 'TG_TOKEN_CHIEF', 'TG_TOKEN_OPS', 'TG_WEBHOOK_SECRET', 'WAKE_KEY_OPS', 'WAKE_URL_OPS']);
   assert.equal(sec.find((s) => s.name === 'BRIDGE_KEY').value, file.BRIDGE_KEY);
   // telegram
   const hooks = calls.filter((c) => c.url.endsWith('/setWebhook'));
@@ -102,7 +106,7 @@ test('deploy-bridge.sh (tanpa langkah CLI) + setup-telegram.sh terhadap server t
   assert.ok(calls.some((c) => c.url.endsWith('/setMyShortDescription')));
   // output: tidak ada rahasia kecuali kode klaim di blok akhir
   const outAll = r1.out + r1.err;
-  for (const v of [file.TG_WEBHOOK_SECRET, file.BRIDGE_KEY, FAKE_PAT, 'wake-key-ops-secret', ...Object.values(TOKENS)]) assert.ok(!outAll.includes(v), 'bocor di output');
+  for (const v of [file.TG_WEBHOOK_SECRET, file.BRIDGE_KEY, file.FX_DEVICE_KEY, FAKE_PAT, 'wake-key-ops-secret', ...Object.values(TOKENS)]) assert.ok(!outAll.includes(v), 'bocor di output');
   assert.equal(outAll.split(file.TG_CLAIM_CODE).length - 1, 1, 'kode klaim dicetak tepat sekali');
   assert.ok(outAll.lastIndexOf('/start ' + file.TG_CLAIM_CODE) > outAll.indexOf('setup Telegram'), 'kode klaim di akhir');
 
