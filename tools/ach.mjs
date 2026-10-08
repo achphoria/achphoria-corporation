@@ -446,5 +446,6 @@ export async function main(argv = process.argv.slice(2), { env = process.env, fe
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then((code) => process.exit(code));
+  // stdout ke pipe bersifat async: tunggu buffer terkirim dulu (keluaran besar seperti erp-schema --json > 64KB tidak terpotong)
+  main().then((code) => process.stdout.write('', () => process.exit(code)));
 }

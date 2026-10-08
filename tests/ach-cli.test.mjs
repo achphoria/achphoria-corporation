@@ -246,3 +246,19 @@ test('v5 format: tabel ringkas, footer terpotong, skema', async () => {
   assert.equal(await main(['erp', '--bot', 'research', '--sql', 'select 1'], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl: deny, out: () => {}, err: (m) => errs.push(m) }), 2);
   assert.match(errs.join(' '), /HTTP 403/);
 });
+
+test('keluaran besar lewat pipe tidak terpotong (> 64KB, mis. erp-schema --json)', async () => {
+  const tables = Array.from({ length: 120 }, (_, i) => ({ table: 'tabel_' + i, kind: 'table', restricted: false, columns: Array.from({ length: 30 }, (_, j) => ({ name: 'kolom_' + j, type: 'numeric(15,2)' })) }));
+  const body = JSON.stringify({ ok: true, count: tables.length, tables, ms: 1 });
+  assert.ok(body.length > 100000);
+  const server = createServer((req, res) => { req.resume(); req.on('end', () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(body); }); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${server.address().port}/ach-bridge`;
+  const child = spawn(process.execPath, [CLI, 'erp-schema', '--bot', 'ops', '--json'], { env: { ...process.env, ACH_BRIDGE_URL: url, ACH_BRIDGE_KEY: 'k' } });
+  let out = '';
+  child.stdout.on('data', (d) => (out += d));
+  const code = await new Promise((r) => child.on('close', r));
+  server.close();
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(out).tables.length, 120);
+});
