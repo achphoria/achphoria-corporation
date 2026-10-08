@@ -84,6 +84,7 @@ test('deploy-bridge.sh (tanpa langkah CLI) + setup-telegram.sh terhadap server t
   const q = calls.filter((c) => c.url.endsWith('/database/query'));
   assert.ok(q[0].body.query.includes('create table if not exists public.ach_inbox'));
   assert.ok(q.some((c) => c.body.query.includes('create table if not exists public.ach_tg_logmsg')), 'migrasi v4 dijalankan');
+  assert.ok(q.some((c) => c.body.query.includes('create or replace function ach_erp.run')), 'migrasi v5 dijalankan');
   const sec = calls.find((c) => c.url.endsWith('/secrets')).body;
   const names = sec.map((s) => s.name).sort();
   assert.deepEqual(names, ['BRIDGE_KEY', 'TG_CLAIM_CODE', 'TG_TOKEN_CHIEF', 'TG_TOKEN_OPS', 'TG_WEBHOOK_SECRET', 'WAKE_KEY_OPS', 'WAKE_URL_OPS']);

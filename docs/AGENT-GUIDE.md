@@ -145,6 +145,66 @@ node tools/ach.mjs log --bot ops --text "dashboard diperbarui" [--task "Rekap mi
 `--task-id` menerima uuid atau 8 karakter dari `Tugas #…`. Filter angka sensitif (Rp/IDR, ≥9 digit, nomor HP)
 juga berlaku untuk `--note`, `--task-note`, dan `log --text`.
 
+## 3c. Akses baca ERP SEMAR (v5) — khusus **ops** (Chief boleh baca)
+
+Bot **Ops & Data** bisa menjawab pertanyaan data dari owner (penjualan, stok, pembelian, dll.) langsung dari database
+ERP SEMAR (project Supabase yang sama). Aksesnya **read-only** dan dibatasi:
+
+- Hanya `--bot ops` (dan `chief`); agen lain ditolak `403`. Semua query dicatat di `ach_erp_audit` (agen, SQL, jumlah baris, ms — **bukan** isi hasil).
+- Hanya **satu** `SELECT` / `WITH … SELECT`. Tanpa komentar (`--`, `/* */`), tanpa `;` di tengah, tanpa `"…"`/`$…$`,
+  tanpa `insert/update/delete/…`, tanpa `pg_*`/`information_schema`/schema lain, dan hanya fungsi umum
+  (`count, sum, avg, min, max, coalesce, round, date_trunc, to_char, now, extract, string_agg, row_number, …`).
+- Maks **200 baris** (`--limit`, default 50). Batas waktu ±8 detik → pakai agregat (`group by`), jangan tarik data mentah.
+- Hanya tabel di allowlist (`erp-schema`). Tabel bertanda `*` hanya sebagian kolom (telepon, email, alamat, NPWP, token QR,
+  nomor referensi pembayaran, payload JSON tidak ikut) → `SELECT *` ditolak, sebut kolomnya satu per satu.
+  Dikecualikan total: `sys_users`, `sys_user_*`, `sys_roles`, `sys_platform_admins`, `sys_payment_gateways`,
+  `sys_payment_gateway_secrets`, tabel legacy (`hive_*`, `ac_*`, `cogs`, `journal`, `recap`, `stock_*`, `pos_config`), dan semua `ach_*`.
+- Data **multi-perusahaan**: kolom `company_id` ada di hampir semua tabel. Tanggal bisnis POS = `business_date` (tanggal lokal outlet);
+  "hari ini" WIB = `(now() at time zone 'Asia/Jakarta')::date` (jangan `current_date`, itu UTC).
+- `pos_orders.status`: `paid` (lunas) / `open`. Item batal: `pos_order_items.is_void = true`.
+
+```bash
+node tools/ach.mjs erp-schema --bot ops                    # daftar tabel + kolom (* = sebagian kolom)
+node tools/ach.mjs erp-schema --bot ops --table pos_orders # kolom + tipe satu tabel
+
+# Penjualan hari ini per outlet (WIB)
+node tools/ach.mjs erp --bot ops --sql "select o.name as outlet, count(*) as orders, sum(p.grand_total) as total
+  from pos_orders p join sys_outlets o on o.id = p.outlet_id
+  where p.status = 'paid' and p.business_date = (now() at time zone 'Asia/Jakarta')::date
+  group by o.name order by total desc"
+
+# Penjualan hari ini per metode bayar (pos_payments)
+node tools/ach.mjs erp --bot ops --sql "select m.name as metode, count(*) as trx, sum(pay.amount - coalesce(pay.change_amount, 0)) as total
+  from pos_payments pay join pos_orders p on p.id = pay.order_id join mst_payment_methods m on m.id = pay.payment_method_id
+  where p.status = 'paid' and p.business_date = (now() at time zone 'Asia/Jakarta')::date
+  group by m.name order by total desc"
+
+# Stok menipis: inv_stocks vs batas minimum per gudang (inv_item_stock_levels)
+node tools/ach.mjs erp --bot ops --sql "select w.name as gudang, i.code, i.name as item, s.quantity, l.min_qty
+  from inv_stocks s
+  join inv_item_stock_levels l on l.warehouse_id = s.warehouse_id and l.item_id = s.item_id
+  join inv_items i on i.id = s.item_id join inv_warehouses w on w.id = s.warehouse_id
+  where l.min_qty > 0 and s.quantity < l.min_qty
+  order by s.quantity / nullif(l.min_qty, 0)" --limit 100
+# (alternatif siap pakai: select warehouse_name, item_name, quantity, min_stock from rpt_stock_balances where is_low_stock)
+
+# Menu terlaris 7 hari terakhir
+node tools/ach.mjs erp --bot ops --sql "select oi.menu_item_name as menu, sum(oi.quantity) as qty, sum(oi.line_total) as omzet
+  from pos_order_items oi join pos_orders p on p.id = oi.order_id
+  where p.status = 'paid' and not oi.is_void and p.business_date >= (now() at time zone 'Asia/Jakarta')::date - 6
+  group by oi.menu_item_name order by qty desc" --limit 10
+```
+
+- Keluaran default tabel ringkas (angka apa adanya, tanpa pemisah ribuan); `--json` untuk JSON mentah (`columns`, `rows`, `row_count`, `truncated`).
+  SQL panjang: `--sql-file /tmp/q.sql` atau `--sql -` (stdin).
+- View laporan ERP siap pakai: `rpt_daily_sales`, `rpt_menu_sales`, `rpt_payment_summary`, `rpt_stock_balances`, `rpt_payables`,
+  `rpt_sales_invoices`, `rpt_voids`, `rpt_menu_food_costs`, dll. (lihat `erp-schema`).
+- **Membalas owner:** `send` (teks) **tidak** kena filter angka, jadi "Rp 1.250.000" boleh. Caption `send-photo/send-file` dari
+  bot **ops ke chat owner** (chat pribadi owner / grup HQ) juga boleh memuat nominal; deretan **≥12 digit**, pola kartu `4444 4444 4444`,
+  dan nomor HP tetap ditolak. Bot lain / chat lain tetap filter ketat.
+- **Jangan** taruh angka penjualan di `report`/`log`/`task` (tampil publik di website & grup LOGS) — tetap ditolak. Tulis "rekap penjualan dikirim ke owner".
+- Jangan kirim data ERP ke pihak luar/grup lain tanpa izin owner. Jangan tampilkan data pribadi pelanggan meski diminta lewat grup.
+
 ## 4. Perintah cepat (dijawab bridge tanpa membangunkanmu)
 
 `/status` (status kelima agen), `/tugas [id]` (tugas terbuka), `/help`. Jadi jaga `report` tetap akurat — itulah yang dibaca owner.
@@ -174,3 +234,7 @@ juga berlaku untuk `--note`, `--task-note`, dan `log --text`.
 | `400 action tidak dikenal` saat `send-photo` | Bridge produksi belum v4.1.0 (belum di-deploy). |
 | `409 grup log belum terdaftar` (`log`) / `log_feed.skipped` | Owner belum kirim `/setlogs` (atau `/start` di grup "ACHPHORIA LOGS"). |
 | Bot tidak merespons di grup | Privasi grup bot masih aktif (atur di @BotFather → /setprivacy → Disable) atau tidak di-mention. |
+| `403 erp_query hanya untuk agen ops` | Akses ERP khusus `--bot ops` (dan chief). |
+| `erp: erp_query ditolak: …` | Query melanggar aturan (bukan SELECT tunggal, kata kunci/fungsi terlarang, tabel dikecualikan). Baca pesannya, tulis ulang. |
+| `erp: permission denied for table …` | Tabel di luar allowlist, atau `SELECT *` / kolom sensitif pada tabel bertanda `*` di `erp-schema`. |
+| `erp: canceling statement due to statement timeout` | Query > ±8 dtk. Persempit tanggal, agregasi dulu, atau pakai view `rpt_*`. |

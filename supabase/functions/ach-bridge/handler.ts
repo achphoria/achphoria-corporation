@@ -16,6 +16,12 @@
  * bridge ke grup itu: pesan induk oleh bot Chief, balasan berutas oleh bot divisi.
  * id pesan induk per tugas disimpan di ach_tg_logmsg. Gagal posting tidak pernah memutus respons API.
  *
+ * v5 — akses BACA ERP SEMAR (project Supabase yang sama): action erp_query / erp_schema, hanya agen
+ * ops (+ chief). Memanggil RPC ach_erp_query / ach_erp_schema (service_role) yang menjalankan SATU SELECT
+ * read-only sebagai role ach_erp_reader (allowlist tabel/kolom via GRANT, maks 200 baris). Setiap panggilan
+ * dicatat di ach_erp_audit (agen, sql, jumlah baris, ms — TANPA isi hasil). Caption file dari bot ops ke
+ * chat owner (pribadi / grup HQ) boleh memuat nominal Rp; deretan ≥12 digit / pola kartu / nomor HP tetap ditolak.
+ *
  * ⚠️ Jangan pernah me-log nilai token / key. Semua pesan error dilewatkan redact().
  */
 
@@ -25,8 +31,14 @@ export const ROOMS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'w
 export const STATUSES = ['kerja', 'terjadwal', 'santai', 'istirahat', 'offline'] as const;
 export const TASK_STATUSES = ['Sedang kerja', 'Terjadwal', 'Selesai'] as const;
 export const INBOX_STATUSES = ['baru', 'diproses', 'selesai', 'gagal'] as const;
-export const VERSION = 'v4.1.0';
+export const VERSION = 'v5.0.0';
 export const TASK_EVENTS = ['gagal', 'approval'] as const;
+/** Agen yang boleh membaca ERP (erp_query / erp_schema). */
+export const ERP_AGENTS: readonly AgentId[] = ['ops', 'chief'];
+export const ERP_MAX_ROWS = 200;
+export const ERP_SQL_MAX = 8000;
+/** Grup HQ owner dikenali dari role 'hq' atau judul. */
+export const HQ_TITLE = /\bACHPHORIA\s+HQ\b/i;
 /** Judul grup yang otomatis dianggap grup log (feed saja). */
 export const LOG_TITLE = /\bLOGS\b/i;
 /** Pesan layanan Telegram (bukan isi percakapan) — tidak pernah masuk inbox. */
@@ -132,6 +144,18 @@ export function sensitiveReason(s: string | null | undefined): string | null {
   if (!s) return null;
   if (/\b(?:Rp|IDR)(?:\b|\s*\d)/i.test(s)) return 'mengandung nominal uang (Rp/IDR)';
   if (/\d{9,}/.test(s)) return 'mengandung deretan angka panjang (≥9 digit, mirip nomor telepon/rekening)';
+  if (/(?:\+62|\b62|\b0)[\s.-]?8\d{1,3}[\s.-]?\d{3,4}[\s.-]?\d{3,5}\b/.test(s)) return 'mengandung pola nomor telepon';
+  return null;
+}
+
+/**
+ * Filter longgar untuk bot ops → chat owner (pribadi / grup HQ): nominal penjualan seperti "Rp 1.250.000"
+ * boleh, tapi deretan ≥12 digit (mirip nomor kartu/rekening), pola kartu 4-4-4, dan nomor HP tetap ditolak.
+ */
+export function opsAmountReason(s: string | null | undefined): string | null {
+  if (!s) return null;
+  if (/\d{12,}/.test(s)) return 'mengandung deretan angka sangat panjang (≥12 digit, mirip nomor kartu/rekening)';
+  if (/\b\d{4}[ -]\d{4}[ -]\d{4}\b/.test(s)) return 'mengandung pola nomor kartu';
   if (/(?:\+62|\b62|\b0)[\s.-]?8\d{1,3}[\s.-]?\d{3,4}[\s.-]?\d{3,5}\b/.test(s)) return 'mengandung pola nomor telepon';
   return null;
 }
@@ -851,6 +875,32 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
     return chatId;
   }
 
+  /** Chat milik owner: chat pribadi user allowlist, atau grup HQ (role 'hq' / judul "ACHPHORIA HQ"). */
+  async function isOwnerChat(bot: AgentId, chatId: number): Promise<boolean> {
+    const rows: Json[] = await db(`ach_tg_chats?select=chat_type,title,role&bot=eq.${bot}&chat_id=eq.${chatId}&limit=1`);
+    const c = rows[0];
+    if (!c) return false;
+    if (c.chat_type === 'private') return isAllowed(chatId);
+    return (c.chat_type === 'group' || c.chat_type === 'supergroup') && (c.role === 'hq' || HQ_TITLE.test(String(c.title ?? '')));
+  }
+
+  /* ---------- ERP (v5) ---------- */
+  const needErpAgent = async (b: Json, action: string): Promise<AgentId> => {
+    const bot = needBot(b);
+    if (!ERP_AGENTS.includes(bot)) {
+      await erpAudit({ agent: bot, action, sql: null, ok: false, error: 'agen tidak diizinkan' });
+      throw new HttpError(403, `${action} hanya untuk agen ${ERP_AGENTS.join(' / ')} (bukan ${bot})`);
+    }
+    return bot;
+  };
+  async function erpAudit(row: { agent: string; action: string; sql: string | null; row_count?: number | null; truncated?: boolean | null; ms?: number | null; ok: boolean; error?: string | null }) {
+    try { await db('ach_erp_audit', { method: 'POST', body: row, prefer: 'return=minimal' }); } catch (e) { warn('audit ERP gagal:', redact(e)); }
+  }
+  const erpError = (e: unknown) => {
+    const status = e instanceof HttpError ? e.status : 502;
+    return new HttpError(status, 'erp: ' + redact(e).replace(/^database:\s*/, ''));
+  };
+
   const TASK_COLS = 'id,title,status,agent_id';
   const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   /** Cari tugas berdasarkan id (uuid penuh atau 8 karakter awal, mis. dari "Tugas #1a2b3c4d") atau judul (agen ini, utamakan yang belum Selesai). */
@@ -996,12 +1046,14 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         const chk = checkFile(name, bytes, mode);
         if ('error' in chk) throw new HttpError(/terlalu besar/.test(chk.error) ? 413 : 400, chk.error);
         const caption = str(body.caption);
+        if (caption !== null && caption.length > 1024) throw new HttpError(400, 'caption maks 1024 karakter');
+        const chatId = await resolveChat(bot, body.chat_id);
         if (caption !== null) {
-          if (caption.length > 1024) throw new HttpError(400, 'caption maks 1024 karakter');
-          const why = sensitiveReason(caption);
+          // v5: bot ops boleh menulis nominal (Rp …) di caption untuk owner (chat pribadi / grup HQ)
+          const relaxed = bot === 'ops' && await isOwnerChat(bot, chatId);
+          const why = relaxed ? opsAmountReason(caption) : sensitiveReason(caption);
           if (why) throw new HttpError(400, `caption ditolak: ${why}.`);
         }
-        const chatId = await resolveChat(bot, body.chat_id);
         const inboxId = intOrNull(body.inbox_id, 'inbox_id');
         const r = await sendFile(bot, chatId, mode, chk.kind, bytes, name, { caption, replyTo: intOrNull(body.reply_to_message_id, 'reply_to_message_id'), silent: !!body.silent });
         if (!r.ok) throw new HttpError(502, 'telegram: ' + (r.error ?? 'gagal'));
@@ -1111,13 +1163,47 @@ export function createHandler(deps: Deps): (req: Request) => Promise<Response> {
         if (!r.ok) throw new HttpError(502, 'telegram: ' + (r.results.find((x) => !x.ok)?.error ?? 'gagal'));
         return { ok: true, message_ids: r.results.map((x) => x.message_id), task_id: task?.id ?? null, reply_to: replyTo };
       }
+      case 'erp_query': {
+        const bot = await needErpAgent(body.bot, 'erp_query');
+        const sqlText = str(body.sql)?.trim() ?? '';
+        if (!sqlText) throw new HttpError(400, 'sql wajib (satu SELECT / WITH … SELECT)');
+        if (sqlText.length > ERP_SQL_MAX) throw new HttpError(400, `sql terlalu panjang (maks ${ERP_SQL_MAX} karakter)`);
+        const limit = Math.min(Math.max(intOrNull(body.limit, 'limit') ?? 50, 1), ERP_MAX_ROWS);
+        const t0 = Date.now();
+        let res: Json = null, err: unknown = null;
+        try { res = await db('rpc/ach_erp_query', { method: 'POST', body: { p_sql: sqlText, p_max_rows: limit } }); } catch (e) { err = e; }
+        const ms = Date.now() - t0;
+        await erpAudit({
+          agent: bot, action: 'erp_query', sql: sqlText, row_count: res?.row_count ?? null, truncated: res?.truncated ?? null, ms,
+          ok: !err, error: err ? redact(err).slice(0, 500) : null,
+        });
+        if (err) throw erpError(err);
+        return {
+          ok: true, agent: bot, columns: res?.columns ?? [], rows: res?.rows ?? [], row_count: res?.row_count ?? 0,
+          truncated: !!res?.truncated, max_rows: res?.max_rows ?? limit, ms,
+        };
+      }
+      case 'erp_schema': {
+        const bot = await needErpAgent(body.bot, 'erp_schema');
+        const table = str(body.table)?.trim() || null;
+        if (table && !/^[a-z_][a-z0-9_]{0,62}$/i.test(table)) throw new HttpError(400, 'nama tabel tidak valid');
+        const t0 = Date.now();
+        let res: Json = null, err: unknown = null;
+        try { res = await db('rpc/ach_erp_schema', { method: 'POST', body: { p_table: table } }); } catch (e) { err = e; }
+        const ms = Date.now() - t0;
+        await erpAudit({ agent: bot, action: 'erp_schema', sql: table, row_count: Array.isArray(res) ? res.length : null, ms, ok: !err, error: err ? redact(err).slice(0, 500) : null });
+        if (err) throw erpError(err);
+        const tables: Json[] = Array.isArray(res) ? res : [];
+        if (table && !tables.length) throw new HttpError(404, `tabel ${table} tidak ada di allowlist ERP (lihat erp_schema tanpa table)`);
+        return { ok: true, agent: bot, count: tables.length, tables, ms };
+      }
       case 'chats': {
         const bot = needBot(body.bot);
         const rows = await db(`ach_tg_chats?select=chat_id,chat_type,title,username,role,last_seen&bot=eq.${bot}&order=last_seen.desc&limit=100`);
         return { ok: true, count: rows.length, rows };
       }
       default:
-        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, send_photo, send_file, typing, inbox, claim, done, fail, report, task, log, chats, ping');
+        throw new HttpError(400, 'action tidak dikenal. Pilihan: send, send_photo, send_file, typing, inbox, claim, done, fail, report, task, log, chats, erp_query, erp_schema, ping');
     }
   }
 

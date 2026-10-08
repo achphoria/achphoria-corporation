@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, buildRequest, loadKey, main, sensitiveReason, UsageError, DEFAULT_URL } from '../tools/ach.mjs';
+import { parseArgs, buildRequest, loadKey, main, sensitiveReason, opsAmountReason, formatRows, formatErp, UsageError, DEFAULT_URL } from '../tools/ach.mjs';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'ach.mjs');
 const build = (argv, env = {}, readText) => buildRequest(parseArgs(argv), { env, readText });
@@ -180,7 +180,7 @@ test('send-photo / send-file: body base64, opsi, validasi', () => {
   assert.throws(() => buildF(['send-file', '--bot', 'ops', '--file', 'x.png'], { 'x.png': PDF }), /tidak cocok/);
   assert.throws(() => buildF(['send-file', '--bot', 'ops'], {}), /--file/);
   assert.throws(() => buildF(['send-file', '--file', 'r.pdf'], { 'r.pdf': PDF }), /--bot/);
-  assert.throws(() => buildF(['send-file', '--bot', 'ops', '--file', 'r.pdf', '--caption', 'Rp 10.000'], { 'r.pdf': PDF }), /caption ditolak/);
+  assert.throws(() => buildF(['send-file', '--bot', 'chief', '--file', 'r.pdf', '--caption', 'Rp 10.000'], { 'r.pdf': PDF }), /caption ditolak/);
   assert.throws(() => checkLocalFile('a.png', new Uint8Array(0), 'photo'), /kosong/);
   assert.throws(() => checkLocalFile('a.gif', PNG, 'document'), /tidak didukung/);
 });
@@ -197,4 +197,52 @@ test('send-file via main(): file asli di disk, dry-run tidak mencetak base64, PO
   assert.equal(seen.init.headers['x-ach-key'], 'k-test');
   assert.equal(JSON.parse(seen.init.body).action, 'send_file');
   assert.equal(await main(['send-file', '--bot', 'ops', '--file', join(dir, 'nope.pdf')], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl, out: () => {}, err: () => {} }), 1);
+});
+
+test('v5 erp / erp-schema: body, sumber SQL, validasi limit', () => {
+  assert.deepEqual(build(['erp', '--bot', 'ops', '--sql', 'select 1 x', '--limit', '20']), { action: 'erp_query', bot: 'ops', sql: 'select 1 x', limit: 20 });
+  assert.deepEqual(build(['erp', '--sql', 'select 1'], { ACH_BOT: 'ops' }), { action: 'erp_query', bot: 'ops', sql: 'select 1' });
+  assert.equal(build(['erp', '--bot', 'ops', '--sql', '-'], {}, (p) => (p === '-' ? ' select 2 \n' : '')).sql, 'select 2');
+  assert.equal(build(['erp', '--bot', 'ops', '--sql-file', 'q.sql'], {}, (p) => 'select 3 -- ' + p).sql, 'select 3 -- q.sql');
+  assert.equal(build(['erp', '--bot', 'ops', 'select', 'count(*)', 'from', 'pos_orders']).sql, 'select count(*) from pos_orders');
+  for (const argv of [['erp', '--bot', 'ops'], ['erp', '--bot', 'ops', '--sql', 'select 1', '--limit', '0'], ['erp', '--bot', 'ops', '--sql', 'select 1', '--limit', '201'], ['erp', '--sql', 'select 1']]) {
+    assert.throws(() => build(argv), UsageError, argv.join(' '));
+  }
+  // agen lain tidak diblok di CLI — server yang menolak (satu sumber kebenaran)
+  assert.equal(build(['erp', '--bot', 'research', '--sql', 'select 1']).bot, 'research');
+  assert.deepEqual(build(['erp-schema', '--bot', 'ops']), { action: 'erp_schema', bot: 'ops' });
+  assert.deepEqual(build(['erp-schema', '--bot', 'ops', '--table', 'pos_orders']), { action: 'erp_schema', bot: 'ops', table: 'pos_orders' });
+});
+
+test('v5 caption ops: nominal Rp boleh, ≥12 digit/kartu/HP ditolak; bot lain tetap ketat', () => {
+  assert.equal(opsAmountReason('Penjualan Rp 1.250.000'), null);
+  assert.ok(opsAmountReason('4111111111111111') && opsAmountReason('4111 1111 1111 1111') && opsAmountReason('0812-3456-7890'));
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+  const bf = (argv) => buildRequest(parseArgs(argv), { env: {}, readFile: () => png });
+  assert.equal(bf(['send-photo', '--bot', 'ops', '--file', 'g.png', '--caption', 'Penjualan Rp 1.250.000']).caption, 'Penjualan Rp 1.250.000');
+  assert.throws(() => bf(['send-photo', '--bot', 'ops', '--file', 'g.png', '--caption', 'kartu 4111111111111111']), UsageError);
+  assert.throws(() => bf(['send-photo', '--bot', 'research', '--file', 'g.png', '--caption', 'Penjualan Rp 1.250.000']), UsageError);
+});
+
+test('v5 format: tabel ringkas, footer terpotong, skema', async () => {
+  const t = formatRows(['outlet', 'n', 'total'], [{ outlet: 'A', n: 12, total: 1250000 }, { outlet: 'B', n: 3, total: null }]);
+  assert.match(t, /^outlet │  n │   total\n/);
+  assert.match(t, /A      │ 12 │ 1250000/);
+  assert.match(formatErp('erp_query', { columns: ['n'], rows: [{ n: 1 }], row_count: 1, truncated: true, max_rows: 1, ms: 9 }), /terpotong di 1/);
+  assert.equal(formatErp('erp_query', { columns: [], rows: [], row_count: 0, ms: 5 }), '(0 baris · 5 ms)');
+  const sc = { tables: [{ table: 'pos_orders', kind: 'table', restricted: true, columns: [{ name: 'id', type: 'uuid' }, { name: 'grand_total', type: 'numeric(15,2)' }] }, { table: 'rpt_daily_sales', kind: 'view', restricted: false, columns: [{ name: 'business_date', type: 'date' }] }] };
+  assert.match(formatErp('erp_schema', sc), /^pos_orders \*: id, grand_total\nrpt_daily_sales \[view\]: business_date/);
+  assert.match(formatErp('erp_schema', { tables: [sc.tables[0]] }, { table: 'pos_orders' }), /pos_orders \(table, sebagian kolom.*\n  id {9}  uuid\n  grand_total  numeric\(15,2\)/);
+  // main(): tabel default, --json mentah
+  const reply = { ok: true, columns: ['n'], rows: [{ n: 7 }], row_count: 1, truncated: false, max_rows: 50, ms: 3 };
+  const fetchImpl = async () => new Response(JSON.stringify(reply), { status: 200 });
+  const outs = [];
+  assert.equal(await main(['erp', '--bot', 'ops', '--sql', 'select 7 n'], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl, out: (m) => outs.push(m), err: () => {} }), 0);
+  assert.match(outs.at(-1), /^n\n─\n7\n\(1 baris · 3 ms\)$/);
+  assert.equal(await main(['erp', '--bot', 'ops', '--sql', 'select 7 n', '--json'], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl, out: (m) => outs.push(m), err: () => {} }), 0);
+  assert.deepEqual(JSON.parse(outs.at(-1)), reply);
+  const deny = async () => new Response(JSON.stringify({ ok: false, error: 'erp_query hanya untuk agen ops / chief (bukan research)' }), { status: 403 });
+  const errs = [];
+  assert.equal(await main(['erp', '--bot', 'research', '--sql', 'select 1'], { env: { ACH_BRIDGE_KEY: 'k' }, fetchImpl: deny, out: () => {}, err: (m) => errs.push(m) }), 2);
+  assert.match(errs.join(' '), /HTTP 403/);
 });

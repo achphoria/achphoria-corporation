@@ -1,7 +1,7 @@
 // Tes lokal Edge Function ach-bridge dengan Supabase (PostgREST) & Telegram tiruan.
 // Jalankan: deno test --allow-none tests/ach-bridge.test.ts   (tanpa jaringan, tanpa secret asli)
 import { FakeDb } from './fake-postgrest.ts';
-import { createHandler, parseCommand, sensitiveReason, splitText, safeEqual, sniffKind, checkFile, PHOTO_MAX } from '../supabase/functions/ach-bridge/handler.ts';
+import { createHandler, parseCommand, sensitiveReason, opsAmountReason, splitText, safeEqual, sniffKind, checkFile, PHOTO_MAX } from '../supabase/functions/ach-bridge/handler.ts';
 
 // deno-lint-ignore no-explicit-any
 type Row = Record<string, any>;
@@ -105,7 +105,7 @@ Deno.test('util: parseCommand / splitText / sensitiveReason / safeEqual', async 
 Deno.test('health & routing', async () => {
   const s = setup();
   const r = await s.handler(new Request('http://localhost/ach-bridge/health'));
-  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v4.1.0' });
+  eq(await r.json(), { ok: true, service: 'ach-bridge', version: 'v5.0.0' });
   eq((await s.handler(new Request('http://localhost/ach-bridge?action=health'))).status, 200);
   eq((await s.handler(new Request('http://localhost/ach-bridge/nope', { method: 'POST' }))).status, 404);
 });
@@ -637,4 +637,83 @@ Deno.test('send_file: pdf, chat dikenal, validasi & filter caption & auth', asyn
   eq((await s.api({ action: 'send_file', bot: 'chief', filename: 'a.pdf', file_base64: b64(PDF) }, 'salah')).status, 401);
   eq((await s.api({ action: 'send_file', bot: 'research', filename: 'a.pdf', file_base64: b64(PDF) })).status, 409);
   eq(s.tgCalls.filter((x) => x.method === 'sendDocument').length, 1, 'yang ditolak tidak terkirim');
+});
+
+/* ---------- v5: akses baca ERP ---------- */
+Deno.test('erp_query: hanya ops/chief, RPC service_role, audit tanpa hasil, limit dibatasi', async () => {
+  const s = setup();
+  const r = await s.api({ action: 'erp_query', bot: 'ops', sql: 'select count(*) n from pos_orders', limit: 999 });
+  const j = await r.json();
+  eq([r.status, j.ok, j.agent, j.columns, j.rows, j.row_count, j.truncated], [200, true, 'ops', ['n'], [{ n: 3 }], 1, false]);
+  assert(typeof j.ms === 'number');
+  eq(s.db.erpCalls.at(-1), { fn: 'ach_erp_query', body: { p_sql: 'select count(*) n from pos_orders', p_max_rows: 200 } });
+  const a = s.db.tables.ach_erp_audit.at(-1)!;
+  eq([a.agent, a.action, a.sql, a.row_count, a.ok], ['ops', 'erp_query', 'select count(*) n from pos_orders', 1, true]);
+  assert(!('rows' in a) && !JSON.stringify(a).includes('"n":3'), 'audit tidak menyimpan hasil');
+  eq((await (await s.api({ action: 'erp_query', bot: 'chief', sql: 'select 1' })).json()).ok, true, 'chief boleh');
+  eq(s.db.erpCalls.at(-1)!.body.p_max_rows, 50, 'default 50');
+  // agen lain ditolak (dan dicatat), tanpa memanggil RPC
+  const n = s.db.erpCalls.length;
+  for (const bot of ['research', 'content', 'engineering']) {
+    const x = await s.api({ action: 'erp_query', bot, sql: 'select 1' });
+    eq(x.status, 403, bot);
+    assert(/hanya untuk agen ops/.test((await x.json()).error));
+  }
+  eq(s.db.erpCalls.length, n, 'RPC tidak dipanggil untuk agen lain');
+  eq(s.db.tables.ach_erp_audit.filter((x) => !x.ok && x.error === 'agen tidak diizinkan').length, 3);
+  eq((await s.api({ action: 'erp_query', bot: 'ops', sql: '  ' })).status, 400);
+  eq((await s.api({ action: 'erp_query', bot: 'ops', sql: 'select ' + 'x'.repeat(8000) })).status, 400);
+  eq((await s.api({ action: 'erp_query', bot: 'ops', sql: 'select 1' }, 'salah')).status, 401);
+});
+
+Deno.test('erp_query: penolakan database diteruskan sebagai 4xx + dicatat gagal', async () => {
+  const s = setup();
+  s.db.erp.ach_erp_query = () => ({ status: 400, json: { code: '22023', message: 'erp_query ditolak: hanya SELECT atau WITH … SELECT' } });
+  const r = await s.api({ action: 'erp_query', bot: 'ops', sql: 'delete from pos_orders' });
+  const j = await r.json();
+  eq([r.status, j.ok], [400, false]);
+  assert(/^erp: erp_query ditolak: hanya SELECT/.test(j.error), j.error);
+  const a = s.db.tables.ach_erp_audit.at(-1)!;
+  eq([a.ok, a.sql, a.row_count], [false, 'delete from pos_orders', null]);
+  assert(/hanya SELECT/.test(a.error));
+  s.db.erp.ach_erp_query = () => ({ status: 403, json: { code: '42501', message: 'permission denied for table crm_customers' } });
+  eq((await s.api({ action: 'erp_query', bot: 'ops', sql: 'select * from crm_customers' })).status, 400);
+});
+
+Deno.test('erp_schema: daftar tabel, filter table, validasi nama, hanya ops/chief', async () => {
+  const s = setup();
+  const j = await (await s.api({ action: 'erp_schema', bot: 'ops' })).json();
+  eq([j.ok, j.count, j.tables[0].table], [true, 1, 'pos_orders']);
+  eq(s.db.erpCalls.at(-1), { fn: 'ach_erp_schema', body: { p_table: null } });
+  await s.api({ action: 'erp_schema', bot: 'ops', table: 'pos_orders' });
+  eq(s.db.erpCalls.at(-1)!.body.p_table, 'pos_orders');
+  eq((await s.api({ action: 'erp_schema', bot: 'ops', table: 'x; drop' })).status, 400);
+  s.db.erp.ach_erp_schema = () => ({ status: 200, json: [] });
+  eq((await s.api({ action: 'erp_schema', bot: 'ops', table: 'sys_users' })).status, 404);
+  eq((await s.api({ action: 'erp_schema', bot: 'research' })).status, 403);
+  eq(s.db.tables.ach_erp_audit.filter((x) => x.action === 'erp_schema').length, 4, 'nama tabel tidak valid ditolak sebelum audit');
+});
+
+Deno.test('v5 caption: ops → chat owner boleh nominal Rp, tetap tolak ≥12 digit / kartu / HP; chat lain & bot lain tetap ketat', async () => {
+  assert(!opsAmountReason('Penjualan hari ini Rp 1.250.000 (Outlet A Rp 750.000)'));
+  assert(!opsAmountReason('Total Rp125000000 dari 298 order'));
+  assert(opsAmountReason('kartu 4111111111111111'), '≥12 digit');
+  assert(opsAmountReason('kartu 4111 1111 1111 1111'), 'pola kartu');
+  assert(opsAmountReason('wa 0812-3456-7890'), 'HP');
+  const s = setup();
+  s.allowOwner();
+  await s.tgPost('ops', s.priv('halo'));
+  await s.tgPost('ops', s.grp('@ach_ops_bot halo'));
+  const send = (bot: string, caption: string, chat_id?: number) =>
+    s.api({ action: 'send_photo', bot, filename: 'g.png', file_base64: b64(PNG), caption, ...(chat_id ? { chat_id } : {}) });
+  eq((await send('ops', 'Penjualan hari ini Rp 1.250.000')).status, 200, 'chat pribadi owner');
+  eq((await send('ops', 'Penjualan hari ini Rp 1.250.000', HQ)).status, 200, 'grup HQ');
+  eq((await send('ops', 'kartu 4111111111111111')).status, 400);
+  eq((await send('ops', 'hubungi 081234567890', HQ)).status, 400);
+  // grup lain yang dikenal bot ops tetap filter ketat
+  s.db.tables.ach_tg_chats.push({ bot: 'ops', chat_id: -100777, chat_type: 'supergroup', title: 'Grup Vendor' });
+  eq((await send('ops', 'Penjualan Rp 1.250.000', -100777)).status, 400);
+  // bot lain ke chat owner tetap ketat
+  await s.tgPost('research', s.priv('halo'));
+  eq((await send('research', 'Penjualan Rp 1.250.000')).status, 400);
 });
