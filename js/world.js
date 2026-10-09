@@ -1,158 +1,211 @@
-/* Peta dunia: lantai, graf waypoint, titik-titik bernama, area hover.
-   Semua koordinat = piksel pada gambar latar 1280×720 (dipetakan manual). */
+/* Peta dunia v5 — denah B "koridor": 5 ruang divisi berjajar di satu koridor engawa, Chief paling besar
+   di tengah, ruang bersama memanjang di bawah, taman Jepang di sekeliling gedung.
+   Semua koordinat = "piksel denah" (1200×760 untuk gedung; taman melebar ke luar). Renderer 3D
+   (scene3d.js) memetakan 40 piksel denah = 1 unit dunia. Rute: ruang → pintu → koridor → pintu → ruang,
+   di dalam ruang menghindari meja & kotatsu (graf visibilitas sudut halangan). */
 (function () {
   const ACH = window.ACH;
 
-  // Tinggi maskot berdiri (px dunia) sesuai kedalaman y — perspektif ringan
-  // v3: ±22% lebih besar dari v2 supaya maskot terbaca jelas tanpa zoom (tetap proporsional dgn perabot)
-  const scaleAt = (y) => 127 * (0.74 + 0.3 * ACH.clamp((y - 300) / 370, -0.2, 1.15));
+  // tinggi maskot berdiri (px denah) — dipakai sim untuk kecepatan & animasi; denah 3D tanpa perspektif
+  const scaleAt = () => 130;
 
-  // Lantai yang bisa dilalui (untuk debug overlay & dokumentasi)
-  const FLOOR = [
-    [296, 470], [350, 478], [378, 402], [470, 416], [552, 392], [800, 378], [940, 404], [1050, 440], [1072, 520],
-    [1092, 590], [1130, 640], [1060, 690], [800, 696], [470, 692], [300, 682], [262, 660], [330, 600], [300, 520],
-  ]
-
-  // Node graf jalan
-  const N = {
-    nook: [372, 598], wb: [336, 498], lft: [425, 520], dk: [486, 428], b1: [600, 396], b2: [700, 389],
-    b3: [784, 393], b4: [872, 404], bk: [978, 432], vd: [1030, 470], r1: [1032, 540], r2: [1040, 640],
-    f1: [790, 672], f2: [610, 668], f0: [450, 640],
+  const MID = 445; // garis tengah koridor
+  const HALLS = [{ x: 20, y: 410, w: 1160, h: 70 }];
+  const ROOMS = {
+    research: { x: 20, y: 20, w: 200, h: 380, door: 'b' },
+    ops: { x: 230, y: 20, w: 200, h: 380, door: 'b' },
+    chief: { x: 440, y: 20, w: 320, h: 380, door: 'b' },
+    content: { x: 770, y: 20, w: 200, h: 380, door: 'b' },
+    engineering: { x: 980, y: 20, w: 200, h: 380, door: 'b' },
+    common: { x: 20, y: 490, w: 1160, h: 250, door: 't' },
   };
-  const E = [
-    ['nook', 'wb'], ['nook', 'f0'], ['wb', 'lft'], ['lft', 'dk'], ['lft', 'f0'], ['dk', 'b1'], ['b1', 'b2'], ['b2', 'b3'],
-    ['b3', 'b4'], ['b4', 'bk'], ['bk', 'vd'], ['vd', 'r1'], ['r1', 'r2'], ['r2', 'f1'], ['f1', 'f2'], ['f2', 'f0'],
-  ];
-  const ADJ = {};
-  Object.keys(N).forEach((k) => (ADJ[k] = []));
-  E.forEach(([a, b]) => { const d = Math.hypot(N[a][0] - N[b][0], N[a][1] - N[b][1]); ADJ[a].push([b, d]); ADJ[b].push([a, d]); });
-
-  // Titik bernama. pose: stand | sit | lie | stool ; lift = tinggi dudukan (px dunia) ; work = animasi mengetik
-  const sp = (id, x, y, via, o) => Object.assign({ id, x, y, via: [].concat(via), pose: 'stand', lift: 0, face: 1 }, o || {});
-  const SPOTS = {
-    // zona "desk" milik masing-masing agen
-    home: {
-      chief: null, // = kursi depan kotatsu (diisi di bawah)
-      research: sp('home-research', 214, 566, 'nook', { pose: 'sit', lift: 10, work: true, face: 1, read: true }),
-      ops: sp('home-ops', 436, 446, ['dk', 'lft'], { work: true, face: -1, glow: '#9fd0ff' }),
-      content: sp('home-content', 1062, 594, ['r1', 'r2'], { work: true, face: 1 }),
-      engineering: sp('home-engineering', 1004, 420, 'bk', { work: true, face: 1, glow: '#7fb8ff' }),
-    },
-    // meja cadangan untuk agen tambahan (id di luar 5 agen v2)
-    spare: [sp('spare-1', 330, 640, 'nook'), sp('spare-2', 700, 680, 'f1'), sp('spare-3', 1110, 660, 'r2')],
-    meeting: [
-      sp('k-front', 832, 600, 'f1', { pose: 'sit', lift: 7 }),
-      sp('k-left', 538, 580, ['f0', 'f2'], { pose: 'sit', lift: 7 }),
-      sp('k-fright', 936, 568, 'r1', { pose: 'sit', lift: 7, face: -1 }),
-      sp('k-bleft', 540, 462, 'lft', { pose: 'sit', lift: 6 }),
-      sp('k-bright', 908, 470, ['b4', 'bk'], { pose: 'sit', lift: 6, face: -1 }),
-    ],
-    tea: [sp('tea-1', 636, 394, 'b1', { face: 1 }), sp('tea-2', 586, 404, 'b1'), sp('tea-3', 680, 398, 'b2', { face: -1 })],
-    ramen: [
-      sp('stool-1', 699, 380, 'b2', { pose: 'stool', lift: 66 }),
-      sp('stool-3', 777, 358, 'b3', { pose: 'stool', lift: 68, face: -1 }),
-      sp('ramen-4', 636, 398, 'b1'),
-      sp('ramen-5', 822, 398, 'b3', { face: -1 }),
-      sp('stool-2', 738, 372, ['b2', 'b3'], { pose: 'stool', lift: 70 }),
-    ],
-    tatami: [sp('tatami-1', 334, 640, 'nook', { pose: 'lie' }), sp('tatami-2', 560, 668, 'f2', { pose: 'lie', face: -1 })],
-    vending: [sp('vend-1', 1032, 452, ['vd', 'bk'], { face: 1 }), sp('vend-2', 994, 474, 'vd', { face: 1 })],
-    whiteboard: [sp('wb-1', 318, 480, 'wb', { face: -1 }), sp('wb-2', 382, 498, ['wb', 'lft'], { face: -1 })],
-    offline: [
-      sp('door-1', 818, 322, 'b3'), sp('door-2', 850, 326, ['b3', 'b4']), sp('door-3', 795, 330, 'b3'),
-      sp('door-4', 868, 336, 'b4'), sp('door-5', 834, 344, 'b3'),
-    ],
+  const ROOM_META = {
+    research: { label: 'Perpustakaan Research', desc: 'Rak buku tinggi & lantai tatami — markas Research' },
+    ops: { label: 'Ruang Monitor Ops & Data', desc: 'Dinding layar grafik — markas Ops & Data' },
+    chief: { label: 'Ruang Chief of Staff', desc: 'Meja Chief, shoji & kotatsu rapat 20 kursi' },
+    content: { label: 'Studio Content & Marketing', desc: 'Kamera tripod, ring light & corkboard ide' },
+    engineering: { label: 'Ruang Server Engineering', desc: 'Rak server berkaca dengan LED berkedip' },
+    common: { label: 'Ruang Bersama', desc: 'Stasiun teh, konter ramen, tatami & vending' },
   };
-  SPOTS.home.chief = Object.assign(SPOTS.meeting[0], { work: true });
-  // v4: titik "jalan-jalan" ambient (bukan kunci ruangan resmi — murni visual)
-  SPOTS.window = [sp('win-1', 300, 505, 'wb', { face: -1 }), sp('win-2', 340, 532, ['wb', 'lft'], { face: -1 })];
-  // posisi tamu saat mengunjungi meja rekan (untuk ngobrol); kunci = id spot rekan
-  const VISIT = {
-    'home-research': sp('visit-research', 300, 590, 'nook', { face: -1 }),
-    'home-ops': sp('visit-ops', 498, 460, ['lft', 'dk'], { face: -1 }),
-    'k-front': sp('visit-chief', 904, 648, ['r2', 'f1'], { face: -1 }),
-    'home-content': sp('visit-content', 990, 614, ['r1', 'r2'], { face: 1 }),
-    'home-engineering': sp('visit-engineering', 924, 462, ['bk', 'b4'], { face: 1 }),
-  };
-  // preferensi kursi rapat per agen (Chief of Staff selalu di depan)
-  const MEET_PREF = { chief: 'k-front', research: 'k-left', content: 'k-fright', ops: 'k-bleft', engineering: 'k-bright' };
+  Object.entries(ROOMS).forEach(([id, r]) => {
+    r.id = id; r.cx = r.x + r.w / 2; r.cy = r.y + r.h / 2;
+    if (r.door === 'b') { r.doorP = [r.cx, r.y + r.h]; r.inn = [r.cx, r.y + r.h - 28]; r.out = [r.cx, MID]; }
+    else { r.doorP = [r.cx, r.y]; r.inn = [r.cx, r.y + 28]; r.out = [r.cx, MID]; }
+    r.obs = [];
+  });
+  // pintu luar ruang bersama → taman (jalan batu ke gerbang)
+  const EXIT = { inn: [600, 712], door: [600, 740], out: [600, 792] };
+  const GATE = [600, 1016];
 
-  // Area untuk tooltip hover (urut dari yang paling spesifik)
-  const AREAS = [
-    { key: 'whiteboard', label: 'Papan Tulis', desc: 'Corat-coret rencana sprint & ide', x0: 244, y0: 112, x1: 402, y1: 236 },
-    { key: 'vending', label: 'Mesin Minuman', desc: 'Teh botol, kopi kaleng & camilan', x0: 1044, y0: 262, x1: 1134, y1: 432 },
-    { key: 'offline', label: 'Pintu Noren', desc: 'Jalan keluar-masuk kantor', x0: 780, y0: 92, x1: 880, y1: 312 },
-    { key: 'tea', label: 'Stasiun Teh', desc: 'Kyusu, teh hijau & cangkir keramik', x0: 556, y0: 150, x1: 672, y1: 380 },
-    { key: 'ramen', label: 'Konter Ramen', desc: '3 bangku untuk makan siang bareng', x0: 672, y0: 230, x1: 800, y1: 380 },
-    { key: 'server', label: 'Booth Server', desc: 'Rak server berkaca — markas Engineering', x0: 940, y0: 110, x1: 1044, y1: 405 },
-    { key: 'studio', label: 'Pojok Konten', desc: 'Corkboard ide, kamera tripod & rak tanaman', x0: 1100, y0: 160, x1: 1280, y1: 640 },
-    { key: 'tatami', label: 'Pojok Tatami', desc: 'Tikar untuk tidur siang sebentar', x0: 286, y0: 586, x1: 420, y1: 690 },
-    { key: 'desk', label: 'Meja Multi-Monitor', desc: 'Tiga layar dashboard — markas Ops & Data', x0: 284, y0: 236, x1: 552, y1: 476 },
-    { key: 'kotatsu', label: 'Kotatsu', desc: 'Meja rapat hangat dengan 5 bantal duduk', x0: 482, y0: 390, x1: 1010, y1: 660 },
-    { key: 'nook', label: 'Pojok Baca', desc: 'Jendela shoji, rak buku, taman zen & bonsai', x0: 0, y0: 70, x1: 300, y1: 660 },
-  ];
+  const sp = (id, x, y, room, o) => Object.assign({ id, x, y, room, via: [], pose: 'stand', lift: 0, face: 1, face3: 0 }, o || {});
+  const toward = (x, y, tx, ty) => Math.atan2(tx - x, ty - y); // arah hadap 3D (0 = menghadap ke depan/kamera)
 
-  function nearestNodes(x, y, k) {
-    return Object.keys(N).map((n) => [n, Math.hypot(N[n][0] - x, N[n][1] - y)]).sort((a, b) => a[1] - b[1]).slice(0, k || 3);
-  }
-  function dijkstra(src) {
-    const dist = {}, prev = {}, todo = new Set(Object.keys(N));
-    Object.keys(N).forEach((n) => (dist[n] = Infinity));
-    dist[src] = 0;
-    while (todo.size) {
-      let u = null; for (const n of todo) if (u === null || dist[n] < dist[u]) u = n;
-      todo.delete(u);
-      for (const [v, d] of ADJ[u]) if (dist[u] + d < dist[v]) { dist[v] = dist[u] + d; prev[v] = u; }
+  /* ---------- meja per ruang divisi: 1 meja kepala + 3 meja admin ---------- */
+  const DESKS = {};
+  let TABLE = null;
+  const SPOTS = { home: {}, spare: [], meeting: [], tea: [], ramen: [], tatami: [], vending: [], whiteboard: [], window: [], offline: [] };
+  ['chief', 'research', 'ops', 'content', 'engineering'].forEach((id) => {
+    const r = ROOMS[id], chief = id === 'chief';
+    const area = chief ? { x: r.x, w: r.w } : { x: r.x, w: r.w };
+    const hw = Math.min(84, area.w - 40);
+    const head = { x: area.x + area.w / 2 - hw / 2, y: r.y + 76, w: hw, h: 28 };
+    const aw = Math.min(54, (area.w - 64) / 3), gap = Math.min(22, (area.w - 40 - 3 * aw) / 2), total = 3 * aw + 2 * gap;
+    const ay = chief ? r.y + 142 : r.y + Math.max(162, r.h * 0.6);
+    const admins = [0, 1, 2].map((i) => { const x = area.x + area.w / 2 - total / 2 + i * (aw + gap); return { x, y: ay, w: aw, h: 20 }; });
+    DESKS[id] = { head, admins };
+    r.obs.push(head, ...admins);
+    SPOTS.home[id] = sp('home-' + id, head.x + hw / 2, head.y - 20, id, { pose: 'sit', work: true, read: id === 'research', glow: id === 'ops' || id === 'engineering' });
+    admins.forEach((a, i) => SPOTS.spare.push(sp(`desk-${id}-${i + 1}`, a.x + aw / 2, a.y - 18, id, { pose: 'sit', work: true })));
+  });
+
+  /* ---------- kotatsu rapat di ruang Chief (20 bantal) ---------- */
+  {
+    const r = ROOMS.chief;
+    TABLE = { x: r.x + 50, y: r.y + 208, w: r.w - 100, h: r.h - 260 };
+    r.obs.push(TABLE);
+    const off = 26, n = 20, x0 = TABLE.x - off, y0 = TABLE.y - off, w = TABLE.w + 2 * off, h = TABLE.h + 2 * off, P = 2 * (w + h);
+    const cx = TABLE.x + TABLE.w / 2, cy = TABLE.y + TABLE.h / 2;
+    for (let i = 0; i < n; i++) {
+      const s = (w / 2 + (i * P) / n) % P;
+      let x, y;
+      if (s < w) { x = x0 + s; y = y0; } else if (s < w + h) { x = x0 + w; y = y0 + s - w; } else if (s < 2 * w + h) { x = x0 + w - (s - w - h); y = y0 + h; } else { x = x0; y = y0 + h - (s - 2 * w - h); }
+      SPOTS.meeting.push(sp('k-' + i, x, y, 'chief', { pose: 'sit', face: x < cx ? 1 : -1, face3: toward(x, y, cx, cy) }));
     }
-    return { dist, prev };
   }
-  const DJ = {}; Object.keys(N).forEach((n) => (DJ[n] = dijkstra(n)));
+  // kursi rapat favorit: Chief di kepala meja (menghadap kamera), kepala divisi menyebar
+  const MEET_PREF = { chief: 'k-0', research: 'k-16', ops: 'k-4', content: 'k-12', engineering: 'k-8' };
+  const MEET_CENTER = [TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h / 2];
 
-  // rute dari (x,y) ke titik tujuan: masuk graf di node terdekat, keluar di salah satu node "via"
-  function route(x, y, spot) {
-    const direct = Math.hypot(spot.x - x, spot.y - y);
-    if (direct < 60) return [[spot.x, spot.y]];
-    let best = null;
-    for (const [s, ds] of nearestNodes(x, y, 3)) {
-      for (const v of spot.via) {
-        const dv = DJ[s].dist[v];
-        const tot = ds + dv + Math.hypot(N[v][0] - spot.x, N[v][1] - spot.y);
-        if (!best || tot < best.tot) best = { s, v, tot };
+  /* ---------- fasilitas ruang bersama ---------- */
+  const FAC = [
+    { key: 'tea', label: 'Stasiun Teh', desc: 'Kyusu, teh hijau & cangkir keramik', x: 50, y: 518, w: 130, h: 44 },
+    { key: 'ramen', label: 'Konter Ramen', desc: '3 bangku untuk makan siang bareng', x: 220, y: 518, w: 170, h: 44 },
+    { key: 'whiteboard', label: 'Papan Tulis', desc: 'Rencana sprint & papan "Hari ini"', x: 430, y: 506, w: 120, h: 16 },
+    { key: 'tatami', label: 'Pojok Tatami', desc: 'Tikar untuk tidur siang sebentar', x: 660, y: 520, w: 190, h: 96 },
+    { key: 'vending', label: 'Mesin Minuman', desc: 'Teh botol, kopi kaleng & camilan', x: 900, y: 512, w: 110, h: 46 },
+    { key: 'lounge', label: 'Sofa Santai', desc: 'Tempat ngobrol & lihat taman', x: 1045, y: 640, w: 110, h: 60 },
+  ];
+  const facOf = (k) => FAC.find((f) => f.key === k);
+  FAC.forEach((f) => { if (f.key !== 'whiteboard') ROOMS.common.obs.push(f); });
+  {
+    const t = facOf('tea'), m = facOf('ramen'), w = facOf('whiteboard'), tt = facOf('tatami'), v = facOf('vending');
+    const front = (f, u) => [f.x + f.w * u, f.y + f.h + 22];
+    [0.22, 0.55, 0.85].forEach((u, i) => { const [x, y] = front(t, u); SPOTS.tea.push(sp('tea-' + (i + 1), x, y, 'common', { face3: Math.PI, face: i ? -1 : 1 })); });
+    [0.2, 0.5, 0.8].forEach((u, i) => { const [x, y] = front(m, u); SPOTS.ramen.push(sp('stool-' + (i + 1), x, y, 'common', { pose: 'stool', lift: 0, face3: Math.PI })); });
+    [0.15, 0.85].forEach((u, i) => { const [x, y] = front(m, u); SPOTS.ramen.push(sp('ramen-' + (i + 4), x, y + 24, 'common', { face3: Math.PI })); });
+    [0.3, 0.75].forEach((u, i) => SPOTS.whiteboard.push(sp('wb-' + (i + 1), w.x + w.w * u, w.y + 46, 'common', { face3: Math.PI, face: i ? -1 : 1 })));
+    [[0.3, 0.45, 1], [0.7, 0.55, -1]].forEach(([u, vv, f], i) => SPOTS.tatami.push(sp('tatami-' + (i + 1), tt.x + tt.w * u, tt.y + tt.h * vv, 'common', { pose: 'lie', face: f, face3: Math.PI / 2 * f })));
+    [0.3, 0.75].forEach((u, i) => { const [x, y] = front(v, u); SPOTS.vending.push(sp('vend-' + (i + 1), x, y, 'common', { face3: Math.PI })); });
+    [[330, 708], [870, 708]].forEach(([x, y], i) => SPOTS.window.push(sp('win-' + (i + 1), x, y, 'common', { face3: 0 })));
+  }
+  // offline: keluar lewat pintu taman, menunggu di dekat gerbang
+  [[600, 935], [545, 960], [655, 960], [575, 990], [625, 990]].forEach(([x, y], i) => SPOTS.offline.push(sp('door-' + (i + 1), x, y, 'garden', { face3: 0 })));
+
+  /* ---------- area tooltip (urut dari yang paling spesifik) ---------- */
+  const R2 = (key, label, desc, x0, y0, x1, y1) => ({ key, label, desc, x0, y0, x1, y1 });
+  const AREAS = [
+    ...FAC.map((f) => R2(f.key, f.label, f.desc, f.x - 6, f.y - 6, f.x + f.w + 6, f.y + f.h + 6)),
+    R2('kotatsu', 'Kotatsu Rapat', 'Meja rapat hangat — semua kumpul di sini saat ada perintah', TABLE.x - 30, TABLE.y - 30, TABLE.x + TABLE.w + 30, TABLE.y + TABLE.h + 30),
+    ...Object.values(ROOMS).map((r) => R2(r.id, ROOM_META[r.id].label, ROOM_META[r.id].desc, r.x, r.y, r.x + r.w, r.y + r.h)),
+    R2('hall', 'Koridor Engawa', 'Lorong kayu yang menghubungkan semua ruang', 20, 410, 1180, 480),
+    R2('gate', 'Gerbang 達成', 'Pintu masuk taman — agen offline menunggu di sini', 520, 900, 680, 1040),
+    R2('pond', 'Kolam Koi', 'Empat ikan koi berenang santai', 4, 820, 268, 956),
+    R2('zen', 'Taman Batu', 'Kerikil bergaris & tiga batu berlumut', 944, 824, 1184, 952),
+    R2('garden', 'Taman Jepang', 'Sakura, momiji, pinus & bambu di sekeliling kantor', -240, -180, 1440, 1060),
+  ];
+
+  /* ---------- geometri bantu ---------- */
+  const inRect = (p, r, m = 0) => p[0] > r.x - m && p[0] < r.x + r.w + m && p[1] > r.y - m && p[1] < r.y + r.h + m;
+  function roomAt(x, y) {
+    for (const r of Object.values(ROOMS)) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r.id;
+    for (const h of HALLS) if (x >= h.x && x <= h.x + h.w && y >= h.y - 12 && y <= h.y + h.h + 12) return 'hall';
+    if (x < 10 || x > 1190 || y < 10 || y > 750) return 'garden';
+    return 'hall'; // celah dinding/pintu
+  }
+  const inFloor = (x, y) => { const r = roomAt(x, y); return r !== 'garden'; };
+  // segmen a→b memotong bagian dalam persegi (Liang–Barsky)
+  function segHits(a, b, r) {
+    let t0 = 0, t1 = 1;
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const P = [-dx, dx, -dy, dy], Q = [a[0] - r.x, r.x + r.w - a[0], a[1] - r.y, r.y + r.h - a[1]];
+    for (let i = 0; i < 4; i++) {
+      if (P[i] === 0) { if (Q[i] <= 0) return false; continue; }
+      const t = Q[i] / P[i];
+      if (P[i] < 0) { if (t > t1) return false; if (t > t0) t0 = t; } else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return t1 - t0 > 1e-4;
+  }
+  const M = 16; // jarak aman badan maskot dari tepi meja (px denah)
+  const grow = (o, m) => ({ x: o.x - m, y: o.y - m, w: o.w + 2 * m, h: o.h + 2 * m });
+  // jalur di dalam satu ruang dari p ke q yang tidak menembus meja (graf visibilitas)
+  function roomPath(roomId, p, q) {
+    const R = ROOMS[roomId];
+    if (!R) return [q];
+    const obs = R.obs.map((o) => grow(o, M)).filter((o) => !inRect(p, o) && !inRect(q, o));
+    const clear = (a, b) => obs.every((o) => !segHits(a, b, o));
+    if (clear(p, q)) return [q];
+    const nodes = [p, q];
+    obs.forEach((o) => [[o.x - 3, o.y - 3], [o.x + o.w + 3, o.y - 3], [o.x + o.w + 3, o.y + o.h + 3], [o.x - 3, o.y + o.h + 3]].forEach((c) => {
+      if (c[0] < R.x + 8 || c[0] > R.x + R.w - 8 || c[1] < R.y + 8 || c[1] > R.y + R.h - 8) return;
+      if (obs.some((o2) => inRect(c, o2, -0.5))) return;
+      nodes.push(c);
+    }));
+    const n = nodes.length, dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+    dist[0] = 0;
+    for (let k = 0; k < n; k++) {
+      let u = -1; for (let i = 0; i < n; i++) if (!done[i] && (u < 0 || dist[i] < dist[u])) u = i;
+      if (u < 0 || dist[u] === Infinity) break;
+      done[u] = true;
+      if (u === 1) break;
+      for (let v = 0; v < n; v++) {
+        if (done[v] || v === u) continue;
+        const d = dist[u] + Math.hypot(nodes[v][0] - nodes[u][0], nodes[v][1] - nodes[u][1]);
+        if (d < dist[v] && clear(nodes[u], nodes[v])) { dist[v] = d; prev[v] = u; }
       }
     }
-    const nodes = [];
-    for (let n = best.v; n; n = DJ[best.s].prev[n]) { nodes.unshift(n); if (n === best.s) break; }
-    const pts = nodes.map((n) => N[n].slice());
-    // pangkas node pertama bila kita sudah melewatinya
-    if (pts.length > 1) {
-      const [a, b] = pts;
-      const ab = Math.hypot(b[0] - a[0], b[1] - a[1]), pb = Math.hypot(b[0] - x, b[1] - y);
-      if (pb < ab) pts.shift();
-    }
-    pts.push([spot.x, spot.y]);
-    return pts;
+    if (prev[1] < 0) return [q]; // tidak ada jalan bersih → langsung (jarang)
+    const out = [];
+    for (let v = 1; v > 0; v = prev[v]) out.unshift(nodes[v]);
+    return out;
   }
-
-  function inFloor(x, y) {
-    let c = false;
-    for (let i = 0, j = FLOOR.length - 1; i < FLOOR.length; j = i++) {
-      const [xi, yi] = FLOOR[i], [xj, yj] = FLOOR[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  const P = (p) => [p[0], p[1]];
+  // rute dari (x,y) ke titik tujuan: ruang → pintu → koridor → pintu → ruang (dan pintu taman bila perlu)
+  function route(x, y, spot) {
+    const pts = [];
+    let cur = [x, y], a = roomAt(x, y);
+    const b = spot.room || roomAt(spot.x, spot.y);
+    const goal = [spot.x, spot.y];
+    if (a === 'garden' && b === 'garden') return [goal];
+    if (a === 'garden') { pts.push(P(EXIT.out), P(EXIT.door), P(EXIT.inn)); cur = EXIT.inn; a = 'common'; }
+    const tRoom = b === 'garden' ? 'common' : b;
+    const target = b === 'garden' ? EXIT.inn : goal;
+    if (a === tRoom) pts.push(...roomPath(a, cur, target));
+    else {
+      if (a !== 'hall') { const R = ROOMS[a]; pts.push(...roomPath(a, cur, R.inn), P(R.doorP), P(R.out)); }
+      const B = ROOMS[tRoom];
+      pts.push(P(B.out), P(B.doorP), P(B.inn), ...roomPath(tRoom, B.inn, target));
     }
-    return c;
+    if (b === 'garden') pts.push(P(EXIT.door), P(EXIT.out), goal);
+    // buang titik ganda berturut-turut
+    return pts.filter((p, i) => i === 0 ? Math.hypot(p[0] - x, p[1] - y) > 0.5 : Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 0.5);
   }
-  // titik kunjungan dinamis di samping rekan (untuk rekan yang tidak di mejanya)
+  // titik kunjungan dinamis di samping rekan (untuk ngobrol)
   function visitSpot(target, fromX) {
-    if (target.at && VISIT[target.at.id]) return VISIT[target.at.id];
+    const room = roomAt(target.x, target.y);
+    if (room === 'garden' || room === 'hall') return null;
     const side = fromX < target.x ? -1 : 1;
-    const cand = [[side * 62, 8], [-side * 62, 8], [side * 44, 42], [-side * 44, 42], [0, 60]];
+    const cand = [[side * 52, 6], [-side * 52, 6], [side * 40, 40], [-side * 40, 40], [0, 54]];
+    const R = ROOMS[room];
     for (const [dx, dy] of cand) {
       const x = target.x + dx, y = target.y + dy;
-      if (!inFloor(x, y)) continue;
-      return sp('visit-' + target.id, x, y, nearestNodes(x, y, 2).map((n) => n[0]), { face: dx > 0 ? -1 : 1 });
+      if (roomAt(x, y) !== room) continue;
+      if (x < R.x + 14 || x > R.x + R.w - 14 || y < R.y + 14 || y > R.y + R.h - 14) continue;
+      if (R.obs.some((o) => inRect([x, y], grow(o, M - 2)))) continue;
+      return sp('visit-' + target.id, x, y, room, { face: dx > 0 ? -1 : 1, face3: toward(x, y, target.x, target.y) });
     }
     return null;
   }
+  const nearestNodes = () => [];
 
-  ACH.world = { scaleAt, FLOOR, NODES: N, EDGES: E, SPOTS, MEET_PREF, AREAS, route, inFloor, visitSpot, nearestNodes };
+  ACH.world = { scaleAt, MID, HALLS, ROOMS, ROOM_META, EXIT, GATE, DESKS, TABLE, FAC, SPOTS, MEET_PREF, MEET_CENTER, AREAS, route, roomAt, roomPath, inFloor, visitSpot, nearestNodes };
 })();

@@ -47,7 +47,7 @@
     });
   }
 
-  /* ---------- rapat di kotatsu: giliran bicara ---------- */
+  /* ---------- rapat di kotatsu ruang Chief: giliran bicara ---------- */
   const meet = { next: 1.5, idx: 0, members: [] };
   function updateMeeting(dt) {
     const group = sim.actors.filter((a) => a.settled && a.at && /^k-/.test(a.at.id) && !a.detour && a.status() !== 'offline');
@@ -68,7 +68,7 @@
     const dur = rnd(2.2, 3.4) * (R.reduced ? 0.8 : 1);
     sp.speakT = R.reduced ? 0 : dur;
     sp.bub(pick(['💬', '💡', '📊', '🗓️', '😄', '👍']), Math.min(2.2, dur));
-    sp.lookFace = Math.sign(720 - sp.x) || 1;
+    sp.lookFace = Math.sign(world.MEET_CENTER[0] - sp.x) || 1;
     group.forEach((o) => {
       if (o === sp) return;
       o.lookFace = Math.sign(sp.x - o.x) || o.face;
@@ -215,12 +215,13 @@
   function spawn(o) { const p = POOL.find((x) => !x.on); if (p) Object.assign(p, { on: true, t: 0 }, o); }
   life.burst = function (a) {
     const g = a.geom(performance.now() / 1000), cx = g.x, cy = g.top + g.dh * 0.25;
-    for (let i = 0; i < 11; i++) spawn({ kind: 's', x: cx + rnd(-g.dw * 0.7, g.dw * 0.7), y: cy + rnd(-g.dh * 0.35, g.dh * 0.35), vx: rnd(-6, 6), vy: rnd(-22, -8), life: rnd(1.0, 1.7), s: rnd(3, 5.4), ph: rnd(0, 6) });
+    const base = a.y;
+    for (let i = 0; i < 11; i++) spawn({ kind: 's', base, x: cx + rnd(-g.dw * 0.7, g.dw * 0.7), y: cy + rnd(-g.dh * 0.35, g.dh * 0.35), vx: rnd(-6, 6), vy: rnd(-22, -8), life: rnd(1.0, 1.7), s: rnd(3, 5.4), ph: rnd(0, 6) });
     if (R.reduced) return;
     for (let i = 0; i < 22; i++) {
       const an = rnd(-Math.PI * 0.95, -Math.PI * 0.05);
       const v = rnd(45, 95);
-      spawn({ kind: 'c', x: cx, y: cy, vx: Math.cos(an) * v, vy: Math.sin(an) * v, life: rnd(1.4, 2.2), s: rnd(1.6, 2.6), rot: rnd(0, 6), vr: rnd(-9, 9), c: pick(COLORS), floor: a.y - rnd(0, 6) });
+      spawn({ kind: 'c', base, x: cx, y: cy, vx: Math.cos(an) * v, vy: Math.sin(an) * v, life: rnd(1.4, 2.2), s: rnd(1.6, 2.6), rot: rnd(0, 6), vr: rnd(-9, 9), c: pick(COLORS), floor: a.y - rnd(0, 6) });
     }
   };
   function updateParticles(dt) {
@@ -234,16 +235,18 @@
       } else { p.x += p.vx * dt; p.y += p.vy * dt; p.vy *= 1 - dt; }
     }
   }
-  life.drawParticles = function (ctx, t) {
+  // map(x, lantaiY, tinggiPx) → [x, y] layar; sc = skala piksel layar per piksel denah (renderer 3D)
+  life.drawParticles = function (ctx, t, map, sc) {
+    const place = (p) => { if (!map) { ctx.translate(p.x, p.y); return; } const [X, Y] = map(p.x, p.base, p.base - p.y); ctx.translate(X, Y); ctx.scale(sc, sc); };
     for (const p of POOL) {
       if (!p.on) continue;
       const k = p.t / p.life, a = Math.min(1, (1 - k) * 2.2);
       if (p.kind === 'c') {
-        ctx.save(); ctx.globalAlpha = a; ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(1, Math.abs(Math.cos(p.rot * 1.3)) * 0.8 + 0.2);
+        ctx.save(); ctx.globalAlpha = a; place(p); ctx.rotate(p.rot); ctx.scale(1, Math.abs(Math.cos(p.rot * 1.3)) * 0.8 + 0.2);
         ctx.fillStyle = p.c; ctx.fillRect(-p.s, -p.s * 0.45, p.s * 2, p.s * 0.9); ctx.restore();
       } else {
         const s = p.s * (0.6 + 0.4 * Math.sin(t * 9 + p.ph)) * (k < 0.2 ? k / 0.2 : 1);
-        ctx.save(); ctx.globalAlpha = a; ctx.translate(p.x, p.y);
+        ctx.save(); ctx.globalAlpha = a; place(p);
         ctx.fillStyle = '#ffd86b';
         ctx.beginPath();
         for (let i = 0; i < 8; i++) { const r = i % 2 ? s * 0.32 : s, an = (i * Math.PI) / 4; ctx.lineTo(Math.cos(an) * r, Math.sin(an) * r); }

@@ -2,8 +2,8 @@
 (function () {
   const ACH = (window.ACH = window.ACH || {});
 
-  ACH.W = 1280; // koordinat dunia = piksel gambar latar 1280×720 (aset 2× untuk zoom)
-  ACH.H = 720;
+  ACH.W = 1200; // koordinat dunia = "piksel denah" gedung 1200×760 (taman melebar ke luar); 40 px = 1 unit 3D
+  ACH.H = 760;
 
   // RNG deterministik (mulberry32)
   ACH.rng = function (seed) {

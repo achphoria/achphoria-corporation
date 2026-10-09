@@ -10,14 +10,7 @@
     im.src = BASE + src;
   });
 
-  const A = (ACH.assets = { mascots: {}, lamps: {} });
-  // meta lampion: kotak potongan (koordinat dunia) + titik gantung (pivot)
-  ACH.LAMPS = [
-    { id: 1, x: 381, y: 0, w: 105.5, h: 144.5, px: 432, py: 0, cx: 433.5, cy: 96, r: 49 },
-    { id: 2, x: 545, y: 0, w: 67.5, h: 134.5, px: 577, py: 4, cx: 578.5, cy: 105, r: 30 },
-    { id: 3, x: 983, y: 19, w: 74.5, h: 119.5, px: 1022, py: 24, cx: 1020, cy: 105, r: 33.5 },
-  ];
-  ACH.KOTATSU = { x: 482, y: 390, w: 476, h: 253.5, sortY: 505 };
+  const A = (ACH.assets = { mascots: {} });
   const SIT_CUT = 0.835; // bagian atas tubuh yang terlihat saat duduk (kaki "masuk" ke bantal)
 
   // potong bagian kaki dengan alas membulat → pose duduk
@@ -36,13 +29,8 @@
 
   A.ready = (async function () {
     const ids = ACH.AGENTS_SEED.map((a) => a.id);
-    const [bg, kotatsu, l1, l2, l3, ...ms] = await Promise.all([
-      load('kantor-bg.webp'), load('kotatsu-depan.webp'),
-      load('lampion-1.webp'), load('lampion-2.webp'), load('lampion-3.webp'),
-      ...ids.flatMap((id) => [load('maskot-' + id + '.webp'), load('maskot-' + id + '-tidur.webp')]),
-    ]);
-    Object.assign(A, { bg, kotatsu });
-    A.lamps = { 1: l1, 2: l2, 3: l3 };
+    // v5: kantor digambar 3D; gambar maskot tetap dipakai untuk avatar sidebar & proporsi animasi
+    const ms = await Promise.all(ids.flatMap((id) => [load('maskot-' + id + '.webp'), load('maskot-' + id + '-tidur.webp')]));
     ids.forEach((id, i) => {
       const open = ms[i * 2], closed = ms[i * 2 + 1] || open;
       if (!open) return;

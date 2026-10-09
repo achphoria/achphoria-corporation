@@ -1,26 +1,22 @@
-/* Aplikasi: loop render, kamera cover-fit (zoom/follow/pan), label + gelembung aktivitas,
+/* Aplikasi: loop render (diorama 3D lewat scene3d.js + kanvas overlay 2D untuk label), kamera
+   (overview / fokus ruang / taman / ikuti agen, putar dengan seret), label + gelembung aktivitas,
    top bar, sidebar dasbor (kartu agen, ringkasan hari ini, log langsung), panel T/L/K */
 (function () {
-  const ACH = window.ACH, W = ACH.W, H = ACH.H;
-  const world = ACH.world, sim = ACH.sim, fx = ACH.fx, store = ACH.store, A = ACH.assets;
+  const ACH = window.ACH;
+  const world = ACH.world, sim = ACH.sim, fx = ACH.fx, store = ACH.store, A = ACH.assets, S3 = ACH.scene3d;
   const $ = (id) => document.getElementById(id);
   const esc = ACH.escape;
   const DEBUG = /[?&]debug=1/.test(location.search);
 
-  const stage = $('stage'), scene = $('scene');
+  const stage = $('stage'), scene = $('scene'), gl = $('gl');
   const ctx = scene.getContext('2d');
-  let dpr = 1, cw = 0, ch = 0, sw = 0, sh = 0; // cw/ch = piksel perangkat, sw/sh = piksel CSS
+  let dpr = 1, cw = 0, ch = 0, sw = 0, sh = 0; // cw/ch = piksel perangkat overlay, sw/sh = piksel CSS
   let stageRect = { left: 0, top: 0 };
-
-  const cam = { x: W / 2, y: H / 2, s: 1, tx: W / 2, ty: H / 2, ts: 1, follow: null, fz: 2.1 };
-  const app = (ACH.app = { cam });
+  const app = (ACH.app = { selected: null });
   const narrow = () => innerWidth <= 760;
-  // cover-fit: ruangan selalu memenuhi panggung (tepi dipotong, tidak pernah ada bar kosong)
-  const cover = () => Math.max(cw / W, ch / H);
-  // framing default: pusat sedikit di bawah tengah supaya kotatsu & lantai jadi fokus
-  const HOME = () => (narrow() ? { x: 690, y: 430 } : { x: 640, y: 372 });
   const UI_FONT = '"Zen Maru Gothic", "Hiragino Maru Gothic ProN", system-ui, sans-serif';
   const EMOJI_FONT = '"Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif';
+  let followA = null; // aktor yang sedang diikuti kamera
 
   function resize() {
     const r = stage.getBoundingClientRect();
@@ -29,93 +25,80 @@
     sw = Math.max(1, Math.round(r.width)); sh = Math.max(1, Math.round(r.height));
     cw = Math.round(sw * dpr); ch = Math.round(sh * dpr);
     if (scene.width !== cw || scene.height !== ch) { scene.width = cw; scene.height = ch; }
-    if (!cam.follow) {
-      const atHome = !app.started || cam.ts <= app.lastCover * 1.02;
-      if (atHome) { const h = HOME(); cam.ts = cover(); cam.tx = h.x; cam.ty = h.y; }
-      cam.ts = Math.max(cam.ts, cover());
-    } else cam.fz = cam.fz || 2.1;
-    app.lastCover = cover();
-    if (!app.started) { cam.s = cam.ts; [cam.x, cam.y] = clampCam(cam.tx, cam.ty, cam.s); }
+    S3.resize();
   }
-  function clampCam(x, y, s) {
-    const vw = cw / s, vh = ch / s;
-    x = vw >= W ? W / 2 : ACH.clamp(x, vw / 2, W - vw / 2);
-    y = vh >= H ? H / 2 : ACH.clamp(y, vh / 2, H - vh / 2);
-    return [x, y];
-  }
-  // koordinat: client (viewport) ↔ dunia ; screen = piksel CSS relatif ke panggung
-  const toWorld = (cx, cy) => [((cx - stageRect.left) * dpr - cw / 2) / cam.s + cam.x, ((cy - stageRect.top) * dpr - ch / 2) / cam.s + cam.y];
-  const toDev = (wx, wy) => [(wx - cam.x) * cam.s + cw / 2, (wy - cam.y) * cam.s + ch / 2];
-  const toScreen = (wx, wy) => { const [x, y] = toDev(wx, wy); return [x / dpr + stageRect.left, y / dpr + stageRect.top]; };
+  // posisi kepala maskot di layar (piksel perangkat overlay)
+  const headDev = (a) => { const [x, y] = S3.headOf(a); return [x * dpr, y * dpr]; };
+  const zoomNow = () => (S3.ok ? ACH.clamp(S3.pxPerPlan() * 1.25, 0.6, 3.2) : 1);
 
   /* ---------------- render ---------------- */
   function rrect(c, x, y, w, h, r) {
     c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
     c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
   }
-  function drawRing(a, t) {
-    const g = a.geom(t);
-    const col = (a.data && a.data.color) || '#ffffff';
-    const y = g.pose === 'stool' || g.pose === 'sit' ? g.y - g.lift + 3 : g.y;
-    const rx = (g.pose === 'lie' ? g.dh * 0.6 : g.dw * (g.pose === 'walk' || g.pose === 'stand' ? 0.52 : 0.58)) * (1 + 0.04 * Math.sin(t * 4));
-    ctx.save();
-    ctx.translate(g.x, y); ctx.scale(1, 0.32);
-    ctx.lineWidth = 3.4; ctx.strokeStyle = ACH.alpha(col, 0.95);
-    ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.stroke();
-    ctx.lineWidth = 1.3; ctx.strokeStyle = 'rgba(255,250,240,0.9)';
-    ctx.beginPath(); ctx.arc(0, 0, rx + 3.2, 0, Math.PI * 2); ctx.stroke();
-    ctx.restore();
-  }
   function render(t, dt) {
+    const mark = followA || hoverActor;
+    S3.frame(dt, t, sim.actors, mark);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#3a2d22'; ctx.fillRect(0, 0, cw, ch);
-    const ox = cw / 2 - cam.x * cam.s, oy = ch / 2 - cam.y * cam.s;
-    ctx.setTransform(cam.s, 0, 0, cam.s, ox, oy);
-    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    if (A.bg) ctx.drawImage(A.bg, 0, 0, W, H);
-    fx.drawBack(ctx, t, dt);
-    // urutkan kedalaman: karakter + penghalang depan (kotatsu)
-    const items = sim.actors.map((a) => ({ y: a.y + (a.pose() === 'stool' ? 0 : 0.01), a }));
-    if (A.kotatsu) items.push({ y: ACH.KOTATSU.sortY, k: true });
-    items.sort((p, q) => p.y - q.y);
-    const mark = cam.follow || hoverActor;
-    for (const it of items) {
-      if (it.k) { const K = ACH.KOTATSU; ctx.drawImage(A.kotatsu, K.x, K.y, K.w, K.h); continue; }
-      if (it.a === mark) drawRing(it.a, t);
-      it.a.draw(ctx, t);
+    ctx.clearRect(0, 0, cw, ch);
+    if (!S3.ok) return;
+    drawRoomLabels();
+    if (ACH.life) {
+      const sc = S3.pxPerPlan() * dpr;
+      ACH.life.drawParticles(ctx, t, (x, base, h) => { const [X, Y] = S3.project(x, base, h * S3.K); return [X * dpr, Y * dpr]; }, sc);
     }
-    fx.drawFront(ctx, t);
-    if (ACH.life) ACH.life.drawParticles(ctx, t);
     if (DEBUG) drawDebug();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
     drawOverlays(t, dt);
   }
+  // papan nama ruangan kecil di sudut depan tiap ruang
+  function drawRoomLabels() {
+    const fs = Math.round(ACH.clamp(zoomNow() * 11, 10.5, 15) * dpr);
+    ctx.save(); ctx.textBaseline = 'middle';
+    for (const L of S3.roomLabels()) {
+      if (!L.vis) continue;
+      const x = L.x * dpr, y = L.y * dpr;
+      if (x < -200 || y < -40 || x > cw + 40 || y > ch + 40) continue;
+      ctx.font = `800 ${fs}px "Shippori Mincho", serif`;
+      const kw = ctx.measureText(L.kanji).width + fs * 0.6;
+      ctx.font = `700 ${fs}px ${UI_FONT}`;
+      const nw = ctx.measureText(L.name).width;
+      const h = fs * 1.7, w = kw + nw + fs * 1.1;
+      ctx.globalAlpha = followA ? 0.55 : 0.92;
+      ctx.fillStyle = 'rgba(246,239,225,0.92)'; ctx.shadowColor = 'rgba(30,18,8,0.3)'; ctx.shadowBlur = 5 * dpr;
+      rrect(ctx, x, y - h / 2, w, h, h / 3); ctx.fill(); ctx.shadowColor = 'transparent';
+      ctx.fillStyle = L.color; rrect(ctx, x + fs * 0.25, y - h / 2 + fs * 0.25, kw, h - fs * 0.5, fs * 0.25); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.font = `800 ${fs}px "Shippori Mincho", serif`; ctx.fillText(L.kanji, x + fs * 0.55, y + dpr * 0.5);
+      ctx.fillStyle = '#2e3a63'; ctx.font = `700 ${fs}px ${UI_FONT}`; ctx.fillText(L.name, x + kw + fs * 0.6, y + dpr * 0.5);
+    }
+    ctx.restore();
+  }
   function drawDebug() {
-    ctx.save();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,255,120,0.8)';
-    ctx.beginPath(); world.FLOOR.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.closePath(); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,60,160,0.9)';
-    world.EDGES.forEach(([a, b]) => { ctx.beginPath(); ctx.moveTo(...world.NODES[a]); ctx.lineTo(...world.NODES[b]); ctx.stroke(); });
-    ctx.fillStyle = '#ff3ca0'; ctx.font = '10px monospace';
-    Object.entries(world.NODES).forEach(([k, [x, y]]) => { ctx.fillRect(x - 3, y - 3, 6, 6); ctx.fillText(k, x + 4, y - 4); });
+    const P = (x, y, h) => { const [X, Y] = S3.project(x, y, h || 0); return [X * dpr, Y * dpr]; };
+    ctx.save(); ctx.lineWidth = 1.5 * dpr; ctx.font = `${10 * dpr}px monospace`;
+    Object.values(world.ROOMS).forEach((r) => {
+      ctx.strokeStyle = 'rgba(255,60,160,0.9)';
+      r.obs.forEach((o) => { ctx.beginPath(); [[o.x, o.y], [o.x + o.w, o.y], [o.x + o.w, o.y + o.h], [o.x, o.y + o.h]].forEach(([x, y], i) => { const [X, Y] = P(x, y); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath(); ctx.stroke(); });
+      ctx.fillStyle = '#00ff88'; [r.inn, r.doorP, r.out].forEach(([x, y]) => { const [X, Y] = P(x, y); ctx.fillRect(X - 3, Y - 3, 6, 6); });
+    });
     const all = [].concat(...Object.values(world.SPOTS).map((v) => (Array.isArray(v) ? v : Object.values(v))));
     ctx.fillStyle = '#00e5ff';
-    all.forEach((s) => { ctx.beginPath(); ctx.arc(s.x, s.y, 3.5, 0, 7); ctx.fill(); ctx.fillText(s.id, s.x + 5, s.y + 10); });
+    all.forEach((s) => { const [X, Y] = P(s.x, s.y); ctx.beginPath(); ctx.arc(X, Y, 3.5 * dpr, 0, 7); ctx.fill(); ctx.fillText(s.id, X + 5 * dpr, Y + 10 * dpr); });
+    ctx.strokeStyle = 'rgba(255,220,0,0.9)';
+    sim.actors.forEach((a) => { if (!a.path.length) return; ctx.beginPath(); ctx.moveTo(...P(a.x, a.y)); a.path.forEach(([x, y]) => ctx.lineTo(...P(x, y))); ctx.stroke(); });
     ctx.restore();
   }
 
   /* -------- label nama + gelembung aktivitas (ruang layar, tajam, tidak saling tumpuk) -------- */
   function tagLayout(t) {
-    const zoom = cam.s / dpr;
-    const fs = Math.round(ACH.clamp(zoom * 12, narrow() ? 11.5 : 13, 18) * dpr); // nama
+    const zoom = zoomNow();
+    const fs = Math.round(ACH.clamp(zoom * 12, narrow() ? 11.5 : 12.5, 18) * dpr); // nama
     const fa = Math.round(fs * 0.84);                           // aktivitas
     const pad = Math.round(fs * 0.62), gap = Math.round(fs * 0.22), tail = Math.round(fs * 0.5);
     const tags = [];
     for (const a of sim.actors) {
       const d = a.data;
       if (!d) continue;
-      const g = a.geom(t);
-      const [ax, ay] = toDev(g.x, g.top - 3);
+      const [ax, ay0] = headDev(a), ay = ay0 - 3 * dpr;
       if (ax < 4 * dpr || ay < -40 * dpr || ax > cw - 4 * dpr || ay > ch - 10 * dpr) continue; // jangkar di luar panggung → tanpa label
       const name = d.name || a.id;
       // label panggung (detour/kantuk/bicara) hanya di panggung; sidebar & log tetap data resmi
@@ -125,7 +108,7 @@
       ctx.font = `500 ${fa}px ${UI_FONT}`;
       const wa = ctx.measureText(txt).width + fa * 1.45;
       const w = Math.round(Math.max(wn, wa) + pad * 2), h = Math.round(fs * 1.18 + fa * 1.2 + gap + pad * 0.95);
-      tags.push({ a, d, g, ax, ay, name, emo, txt, w, h, x: ax - w / 2, y: ay - tail - h, fs, fa, pad, gap, tail });
+      tags.push({ a, d, ax, ay, name, emo, txt, w, h, x: ax - w / 2, y: ay - tail - h, fs, fa, pad, gap, tail });
     }
     // relaksasi: dorong kotak yang bertabrakan (lebih suka geser horizontal), tarik balik ke jangkar
     const M = 5 * dpr, top0 = 6 * dpr;
@@ -149,12 +132,12 @@
     return tags;
   }
   function drawOverlays(t, dt) {
-    const zoom = cam.s / dpr;
+    const zoom = zoomNow();
     const tags = tagLayout(t);
     const k = 1 - Math.exp(-dt * 10);
     ctx.textBaseline = 'middle';
     // urutan gambar: belakang dulu, yang difokus terakhir
-    tags.sort((p, q) => (p.a === cam.follow) - (q.a === cam.follow) || p.ay - q.ay);
+    tags.sort((p, q) => (p.a === followA) - (q.a === followA) || p.ay - q.ay);
     for (const T of tags) {
       const a = T.a, d = T.d;
       // haluskan offset relatif ke jangkar (tidak tertinggal saat kamera bergerak)
@@ -162,7 +145,7 @@
       if (a.tagOff === undefined || Math.hypot(a.tagOff[0] - dx, a.tagOff[1] - dy) > 260 * dpr) a.tagOff = [dx, dy];
       else { a.tagOff[0] += (dx - a.tagOff[0]) * k; a.tagOff[1] += (dy - a.tagOff[1]) * k; }
       const bx = Math.round(T.ax - T.w / 2 + a.tagOff[0]), by = Math.round(T.ay - T.tail - T.h + a.tagOff[1]);
-      const focus = a === cam.follow || a === hoverActor;
+      const focus = a === followA || a === hoverActor;
       const off = d.eff.status === 'offline';
       const st = ACH.dispStatus(d.eff);
       ctx.save();
@@ -255,9 +238,8 @@
     for (const a of sim.actors) {
       const b = a.bubble;
       if (!b || !a.data) continue;
-      const g = a.geom(t);
-      const side = g.face || 1;
-      const [hx, hy] = toDev(g.x + side * g.dw * 0.42, g.top + g.dh * 0.2);
+      const side = a.facing() || 1;
+      const [h0x, h0y] = headDev(a), hx = h0x + side * 16 * zoom * dpr, hy = h0y + 12 * zoom * dpr;
       if (hx < 0 || hy < 0 || hx > cw || hy > ch) continue;
       const r = ACH.clamp(zoom * 10.5, 10, 19) * dpr;
       const kk = Math.min(1, b.t / 0.22), out = Math.max(0, (b.t - (b.dur - 0.28)) / 0.28);
@@ -278,40 +260,21 @@
     }
   }
 
+
   /* ---------------- loop ---------------- */
   let last = performance.now(), t0 = last;
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
     const t = (now - t0) / 1000;
     sim.update(dt, t);
-    const cv = cover();
-    if (cam.follow) {
-      const g = cam.follow.geom(t);
-      cam.ts = cv * cam.fz;
-      cam.tx = g.x;
-      cam.ty = g.top + (g.y - g.top) * 0.35;
-    }
-    const k = 1 - Math.exp(-dt * (cam.follow ? 4 : 5));
-    cam.ts = Math.max(cam.ts, cv);
-    cam.s = Math.max(cv, Math.exp(ACH.lerp(Math.log(cam.s), Math.log(cam.ts), k)));
-    const [cx, cy] = clampCam(cam.tx, cam.ty, cam.s);
-    cam.x = ACH.lerp(cam.x, cx, k); cam.y = ACH.lerp(cam.y, cy, k);
-    [cam.x, cam.y] = clampCam(cam.x, cam.y, cam.s);
     render(t, dt);
     requestAnimationFrame(loop);
   }
 
-  /* ---------------- interaksi panggung ---------------- */
+  /* ---------------- interaksi panggung: klik maskot = ikuti, klik ruang = fokus, seret = putar ---------------- */
   let hoverActor = null, down = null, dragged = false;
-  const nowT = () => (performance.now() - t0) / 1000;
-  function actorAt(wx, wy) {
-    const t = nowT();
-    let best = null;
-    for (const a of sim.actors) if (a.hit(wx, wy, t) && (!best || a.y > best.y)) best = a;
-    return best;
-  }
-  const areaAt = (wx, wy) => world.AREAS.find((r) => wx >= r.x0 && wx <= r.x1 && wy >= r.y0 && wy <= r.y1);
-  const countIn = (r) => sim.actors.filter((a) => a.x >= r.x0 && a.x <= r.x1 && a.y >= r.y0 && a.y <= r.y1 + 30).length;
+  const areaAt = (x, y) => world.AREAS.find((r) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1);
+  const countIn = (r) => sim.actors.filter((a) => a.x >= r.x0 && a.x <= r.x1 && a.y >= r.y0 && a.y <= r.y1).length;
   const tip = $('tip');
   function showTip(html, x, y) {
     tip.innerHTML = html; tip.hidden = false;
@@ -324,22 +287,19 @@
     hoverActor = a;
     document.querySelectorAll('.acard').forEach((el) => el.classList.toggle('hover', !!a && el.dataset.id === a.id));
   }
+  const pickActor = (e) => (S3.ok ? S3.actorAt(e.clientX, e.clientY, sim.actors) : null);
 
-  scene.addEventListener('pointerdown', (e) => { tip.hidden = true; down = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y }; dragged = false; scene.setPointerCapture(e.pointerId); });
+  scene.addEventListener('pointerdown', (e) => { tip.hidden = true; down = { x: e.clientX, y: e.clientY }; dragged = false; scene.setPointerCapture(e.pointerId); S3.dragStart && S3.dragStart(); });
   scene.addEventListener('pointermove', (e) => {
+    if (!S3.ok) return;
     if (down) {
       const dx = e.clientX - down.x, dy = e.clientY - down.y;
       if (!dragged && Math.hypot(dx, dy) > 5) dragged = true;
-      if (dragged && !cam.follow) {
-        const [x, y] = clampCam(down.cx - (dx * dpr) / cam.s, down.cy - (dy * dpr) / cam.s, cam.s);
-        cam.x = cam.tx = x; cam.y = cam.ty = y;
-        scene.style.cursor = 'grabbing';
-      }
+      if (dragged) { S3.dragMove(dx, dy); scene.style.cursor = 'grabbing'; }
       tip.hidden = true;
       return;
     }
-    const [wx, wy] = toWorld(e.clientX, e.clientY);
-    const a = actorAt(wx, wy);
+    const a = pickActor(e);
     setHover(a);
     scene.style.cursor = a ? 'pointer' : 'grab';
     if (a && a.data) {
@@ -347,52 +307,48 @@
       showTip(`<b style="color:${esc(ACH.shade(d.color, -0.35))}">${esc(d.name)}</b><br><i class="dot" style="background:${st.color}"></i>${st.label} · ${esc(ACH.roomLabel(d.eff.location, d.id))}<br><span class="muted">${esc(d.eff.activity || '')}</span>`, e.clientX, e.clientY);
       return;
     }
-    const r = areaAt(wx, wy);
+    const p = S3.planAt(e.clientX, e.clientY), r = p && areaAt(p[0], p[1]);
     if (r) {
       const n = countIn(r);
       showTip(`<b>${esc(r.label)}</b><br><span class="muted">${esc(r.desc)}</span>${n ? `<br>${n} agen di sini` : ''}`, e.clientX, e.clientY);
     } else tip.hidden = true;
   });
-  scene.addEventListener('pointerup', () => {
+  scene.addEventListener('pointerup', (e) => {
     scene.style.cursor = 'grab';
     if (!down) return;
-    const wasDrag = dragged; const p = down; down = null;
-    if (wasDrag) return;
-    const [wx, wy] = toWorld(p.x, p.y);
-    const a = actorAt(wx, wy);
-    if (a) follow(a.id);
-    else if (cam.follow) unfollow();
+    const wasDrag = dragged; down = null;
+    S3.dragEnd && S3.dragEnd();
+    if (wasDrag || !S3.ok) return;
+    const a = pickActor(e);
+    if (a) return follow(a.id);
+    if (followA) return unfollow();
+    const p = S3.planAt(e.clientX, e.clientY), room = p && world.roomAt(p[0], p[1]);
+    if (room && world.ROOMS[room] && app.focus !== room) focusRoom(room);
+    else home();
   });
   scene.addEventListener('pointerleave', () => { tip.hidden = true; setHover(null); });
-  scene.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const f = Math.exp(-e.deltaY * 0.0016);
-    if (cam.follow) { cam.fz = ACH.clamp(cam.fz * f, 1.25, 4.5); return; }
-    const ns = ACH.clamp(cam.s * f, cover(), cover() * 4.5);
-    const [wx, wy] = toWorld(e.clientX, e.clientY);
-    const px = (e.clientX - stageRect.left) * dpr, py = (e.clientY - stageRect.top) * dpr;
-    const [x, y] = clampCam(wx - (px - cw / 2) / ns, wy - (py - ch / 2) / ns, ns);
-    cam.s = cam.ts = ns; cam.x = cam.tx = x; cam.y = cam.ty = y;
-  }, { passive: false });
+  scene.addEventListener('wheel', (e) => { e.preventDefault(); S3.zoomBy(Math.exp(-e.deltaY * 0.0016)); }, { passive: false });
 
   function follow(id) {
     const a = sim.agents[id];
     if (!a) return;
-    if (cam.follow !== a) cam.fz = narrow() ? 1.75 : 2.1;
-    cam.follow = a; app.selected = id;
+    followA = a; app.selected = id; app.focus = null;
+    S3.follow(a, narrow() ? 0.85 : 1);
     if (!panels.roster.hidden) showPanel('roster', false); // detail kini ada di kartu sidebar
     renderCards(true);
     const el = document.querySelector(`.acard[data-id="${CSS.escape(id)}"]`);
     if (el) setTimeout(() => el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 60);
   }
   function unfollow() {
-    cam.follow = null; app.selected = null;
+    followA = null; app.selected = null;
     renderCards(true);
     $('sidebar').scrollTo({ top: 0, behavior: 'smooth' });
     home();
   }
-  function home() { const h = HOME(); cam.ts = cover(); cam.tx = h.x; cam.ty = h.y; }
-  Object.assign(app, { follow, unfollow, toScreen, toWorld, home, cover: () => cover() });
+  function home() { app.focus = null; S3.home(); }
+  function focusRoom(id) { app.focus = id; S3.focusRoom(id); }
+  function garden() { if (followA) { followA = null; app.selected = null; renderCards(true); } app.focus = 'garden'; S3.garden(); }
+  Object.assign(app, { follow, unfollow, home, focusRoom, garden });
 
   /* ---------------- panel overlay ---------------- */
   const panels = { roster: $('roster'), log: $('logPanel'), board: $('board') };
@@ -411,7 +367,8 @@
   app.showPanel = showPanel;
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => showPanel(b.dataset.close, false)));
   document.querySelectorAll('#toolbar button').forEach((b) => b.addEventListener('click', () => {
-    if (b.dataset.act === 'home') { if (cam.follow) unfollow(); else home(); return; }
+    if (b.dataset.act === 'home') { if (followA) unfollow(); else home(); return; }
+    if (b.dataset.act === 'garden') { garden(); return; }
     showPanel(b.dataset.act);
   }));
   $('feedAll').addEventListener('click', () => showPanel('log'));
@@ -424,9 +381,10 @@
     if (k === 't') showPanel('board');
     else if (k === 'l') showPanel('log');
     else if (k === 'k') showPanel('roster');
-    else if (k === '0') { if (cam.follow) unfollow(); else home(); }
+    else if (k === '0') { if (followA) unfollow(); else home(); }
+    else if (k === 'g') garden();
     else if (k === 'escape') {
-      if (cam.follow) unfollow();
+      if (followA) unfollow();
       else if (!panels.board.hidden) showPanel('board', false);
       else if (!panels.roster.hidden) showPanel('roster', false);
       else if (!panels.log.hidden) showPanel('log', false);
@@ -665,6 +623,11 @@
   /* ---------------- start ---------------- */
   function start() {
     if (app.started) return;
+    if (!S3.init || !S3.init(gl, stage)) {
+      const m = document.createElement('div'); m.className = 'nogl';
+      m.innerHTML = '<b>Kantor 3D tidak bisa ditampilkan</b><span>' + esc(S3.error || 'WebGL tidak tersedia') + '. Dasbor di samping tetap terbarui LIVE.</span>';
+      stage.appendChild(m);
+    }
     resize();
     addEventListener('resize', resize);
     if (window.ResizeObserver) new ResizeObserver(resize).observe(stage);
