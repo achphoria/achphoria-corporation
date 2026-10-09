@@ -4,11 +4,11 @@
 
   // 5 agen v2 — nama tampilan = nama divisi. home = zona "desk" milik agen.
   ACH.AGENTS_SEED = [
-    { id: 'chief', name: 'Chief of Staff', division: 'Chief of Staff', color: '#d98c8c', prop: 'gulungan', home: 'kotatsu', homeLabel: 'Kotatsu' },
-    { id: 'research', name: 'Research', division: 'Research', color: '#8fb8de', prop: 'tumpukan buku', home: 'nook', homeLabel: 'Pojok Baca' },
-    { id: 'ops', name: 'Ops & Data', division: 'Ops & Data', color: '#8fae8b', prop: 'tablet grafik', home: 'desk', homeLabel: 'Meja Multi-Monitor' },
-    { id: 'content', name: 'Content & Marketing', division: 'Content & Marketing', color: '#a8a29a', prop: 'secangkir teh', home: 'studio', homeLabel: 'Pojok Konten (corkboard & kamera)' },
-    { id: 'engineering', name: 'Engineering', division: 'Engineering', color: '#e0a64a', prop: 'obeng', home: 'server', homeLabel: 'Booth Server' },
+    { id: 'chief', name: 'Chief of Staff', division: 'Chief of Staff', color: '#d98c8c', prop: 'gulungan', home: 'chief', homeLabel: 'Meja Chief', kanji: '本部' },
+    { id: 'research', name: 'Research', division: 'Research', color: '#8fb8de', prop: 'tumpukan buku', home: 'research', homeLabel: 'Perpustakaan', kanji: '研究' },
+    { id: 'ops', name: 'Ops & Data', division: 'Ops & Data', color: '#8fae8b', prop: 'tablet grafik', home: 'ops', homeLabel: 'Ruang Monitor', kanji: '運用' },
+    { id: 'content', name: 'Content & Marketing', division: 'Content & Marketing', color: '#a8a29a', prop: 'secangkir teh', home: 'content', homeLabel: 'Studio Konten', kanji: '広報' },
+    { id: 'engineering', name: 'Engineering', division: 'Engineering', color: '#e0a64a', prop: 'obeng', home: 'engineering', homeLabel: 'Ruang Server', kanji: '技術' },
   ];
   ACH.V2_IDS = ACH.AGENTS_SEED.map((a) => a.id);
   ACH.V1_IDS = ['commander', 'marketing', 'sales', 'finance', 'success', 'hr'];
@@ -19,13 +19,13 @@
   ACH.ROOM_KEYS = ['desk', 'meeting', 'tea', 'ramen', 'tatami', 'vending', 'whiteboard', 'offline'];
   ACH.ROOM_LABEL = {
     desk: 'Meja Kerja',
-    meeting: 'Rapat di Kotatsu',
+    meeting: 'Rapat di Ruang Chief',
     tea: 'Stasiun Teh',
     ramen: 'Konter Ramen',
     tatami: 'Pojok Tatami',
     vending: 'Mesin Minuman',
     whiteboard: 'Papan Tulis',
-    offline: 'Pulang (Noren)',
+    offline: 'Pulang (Gerbang Taman)',
   };
   ACH.roomLabel = (loc, agentId) => {
     if (loc === 'desk' && ACH.PROFILE[agentId]) return ACH.PROFILE[agentId].homeLabel;
@@ -68,7 +68,7 @@
     whiteboard: ['💡', 'brainstorm'],
     offline: ['👋', 'offline'],
   };
-  const ROOM_TO = { desk: 'meja', meeting: 'kotatsu', tea: 'stasiun teh', ramen: 'konter ramen', tatami: 'tatami', vending: 'vending', whiteboard: 'papan tulis', offline: 'pintu' };
+  const ROOM_TO = { desk: 'meja', meeting: 'ruang Chief', tea: 'stasiun teh', ramen: 'konter ramen', tatami: 'tatami', vending: 'vending', whiteboard: 'papan tulis', offline: 'gerbang' };
   const KEYWORDS = [
     [/baca|membaca|riset|paper|survei/i, '📚', 'baca riset'],
     [/deploy|rilis|patch/i, '🚀', 'deploy patch'],

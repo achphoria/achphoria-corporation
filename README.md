@@ -4,10 +4,10 @@ Kantor virtual **LIVE** untuk ACHPHORIA CORPORATION: sebuah kantor mungil bergay
 
 ![Overview kantor ACHPHORIA](assets/preview.webp)
 
-- **Latar:** satu ilustrasi diorama clay (dinding pasir, kayu ash, tekstil indigo, tanaman sage, bantal terakota, cahaya amber). Isinya: pojok baca dengan jendela shoji, rak buku, taman zen dan bonsai; meja multi-monitor; kotatsu dengan 5 bantal duduk; booth server berkaca; corkboard, kamera tripod, dan rak tanaman; stasiun teh dengan kyusu beruap plus konter ramen 3 bangku; pintu noren; vending machine; papan tulis; lampion; dan monstera.
-- **Karakter:** sprite maskot clay di atas latar. Ukurannya mengikuti perspektif (makin depan makin besar), urutan gambarnya diatur menurut kedalaman (y), ada bayangan kontak lembut berlapis, dan bagian depan kotatsu ikut menutupi agen yang duduk di belakangnya. Sprite "diterangi" ulang tiap frame: warna & terang mengikuti cahaya lokal di latar (diambil dari peta cahaya kecil gambar latar), dihangatkan sesuai jam (siang / senja / malam), oklusi lembut di bagian bawah, dan *rim light* hangat dari lampion saat malam (dari jendela saat senja). Maskot dicerminkan saat berjalan ke kiri.
+- **Kantor 3D (v5, denah B "koridor"):** diorama 3D real-time (Three.js) dilihat dari atas serong seperti rumah boneka: 5 ruang divisi berjajar di satu koridor engawa — Perpustakaan Research (rak buku, tatami), Ruang Monitor Ops & Data (dinding layar grafik), Ruang Chief of Staff paling besar di tengah (meja Chief, shoji, kakejiku, **kotatsu rapat 20 bantal**), Studio Content (kamera tripod, ring light, corkboard), Ruang Server Engineering (rak server ber-LED) — plus Ruang Bersama memanjang di bawah (stasiun teh, konter ramen, papan tulis, tatami, vending, sofa). Tiap ruang divisi punya **1 meja kepala + 3 meja admin** (kosong dulu; lampu menyala bila ada yang duduk) dan noren berwarna divisi + kanji di pintu. Di sekeliling gedung ada **taman Jepang**: gerbang merah 達成 dengan jalan batu pijakan, kolam koi, taman batu kerikil, sakura (kelopak berguguran), momiji, pinus, bambu, lentera batu, pagar tanaman.
+- **Karakter:** maskot kacang clay 3D berjaket *happi* indigo (warna badan = warna divisi), bayangan asli, berjalan lewat pintu & koridor dan menghindari meja/kotatsu. Agen offline keluar lewat pintu taman dan menunggu redup di dekat gerbang. Gambar maskot 2D tetap dipakai untuk avatar di sidebar.
 - **Animasi:** jalan melompat dengan *squash & stretch*, napas pelan saat diam, kedip mata, getar mengetik di meja, duduk di bantal atau bangku, tidur berbaring dengan "z", serta emote 💬 ☕ 🍜 💡 🥤 yang memantul di label agen.
-- **Suasana yang bereaksi pada data:** 3 monitor menyala lebih terang (dengan baris data bergulir) saat Ops & Data bekerja di mejanya, LED rak server berkedip lebih cepat saat Engineering bekerja, uap kyusu menebal saat ada yang di stasiun teh, mangkuk di konter mengepul saat ada yang makan ramen, dan kertas **"HARI INI · 本日"** di papan tulis (digambar mengikuti perspektif dinding) menampilkan jumlah tugas *sedang kerja* dan *selesai hari ini*. Ditambah lampion bergoyang/berkerlip (badan lampion menyala saat malam), vending berpendar, debu di cahaya jendela, dan tint siang/senja/malam menurut jam WIB.
+- **Suasana yang bereaksi pada data & waktu:** layar grafik Ops bergulir & lebih terang saat Ops & Data bekerja di mejanya, LED rak server berkedip lebih cepat saat Engineering bekerja, ring light studio menyala saat Content bekerja, lampu meja menyala bila mejanya terisi, lampion besar di atas kotatsu berdenyut saat ada rapat, uap teh/ramen menebal saat ada yang di sana, papan tulis **"HARI INI · 本日"** menampilkan jumlah tugas *sedang kerja / terjadwal / selesai hari ini*. Cahaya matahari, lampion, dan lentera taman berubah siang/senja/malam menurut jam WIB.
 - **Tata letak (v3):** *top bar* ramping (wordmark + hanko 達成 di kiri, ringkasan tim seperti "3 kerja · 1 meeting · 1 istirahat" di tengah, jam WIB + tanggal + badge **LIVE/DEMO** di kanan), panggung kantor yang **selalu memenuhi ruang** (cover-fit: tepi dipotong, tidak pernah ada bar kosong; geser & zoom dibatasi supaya tidak ada area kosong), dan **sidebar dasbor** kertas washi di kanan (≈330–384 px). Di HP sidebar menjadi *bottom sheet* yang bisa ditarik/ketuk untuk dibesarkan.
 - **Sidebar dasbor:** (a) 5 kartu agen — avatar maskot, nama divisi, pill status berwarna (Kerja / Meeting / Istirahat / Santai / Terjadwal / Offline), lokasi, aktivitas + tugas satu baris, "update 4 mnt lalu"; klik kartu = zoom & ikuti agen, kartu agen yang diikuti disorot dan **membuka detail** (tugas, log terbaru, tombol tutup) menggantikan kartu detail melayang lama; (b) **Ringkasan hari ini**: Sedang kerja / Terjadwal / Selesai hari ini + bar progres; (c) **Log langsung**: 8 entri terbaru, entri baru masuk dengan animasi.
 - **Label di panggung:** tiap maskot punya label nama + gelembung aktivitas singkat (emoji + 2–4 kata, mis. "📊 pantau data", "🍵 istirahat teh", "💬 meeting", "🚶 menuju kotatsu"). Label digambar tajam di ruang layar dan didorong agar tidak saling tumpuk saat agen berkumpul (dengan garis penunjuk bila bergeser jauh).
@@ -17,11 +17,11 @@ Kantor virtual **LIVE** untuk ACHPHORIA CORPORATION: sebuah kantor mungil bergay
 
 | id | Nama tampilan | Warna | Properti | Zona "desk" |
 |---|---|---|---|---|
-| `chief` | Chief of Staff | rose pudar `#d98c8c` | gulungan | kotatsu (kursi depan) |
-| `research` | Research | biru langit `#8fb8de` | tumpukan buku | pojok baca (bantal dekat rak buku) |
-| `ops` | Ops & Data | sage `#8fae8b` | tablet grafik | meja multi-monitor |
-| `content` | Content & Marketing | abu hangat `#a8a29a` | secangkir teh | pojok konten (corkboard + kamera) |
-| `engineering` | Engineering | amber `#e0a64a` | obeng | booth server |
+| `chief` | Chief of Staff | rose pudar `#d98c8c` | gulungan | meja Chief (ruang tengah) |
+| `research` | Research | biru langit `#8fb8de` | tumpukan buku | Perpustakaan |
+| `ops` | Ops & Data | sage `#8fae8b` | tablet grafik | Ruang Monitor |
+| `content` | Content & Marketing | abu hangat `#a8a29a` | secangkir teh | Studio Konten |
+| `engineering` | Engineering | amber `#e0a64a` | obeng | Ruang Server |
 
 Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdasarkan `id`.
 
@@ -36,7 +36,7 @@ Nama, divisi, dan warna bisa diubah di tabel `ach_agents`. Maskot dipilih berdas
 | Log aktivitas | 8 terbaru selalu di sidebar; `L` / "Semua" membuka log lengkap. Entri baru muncul dengan animasi, waktu dalam WIB |
 | Tim | Selalu terlihat di sidebar; `K` membuka daftar Tim versi besar (dengan nomor tombol) |
 | Tooltip | Arahkan kursor ke maskot atau fasilitas (kotatsu, stasiun teh, vending, …) |
-| Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan peta lantai, graf jalan, dan titik-titik bernama · `?hidup=cepat` mempercepat semua timer perilaku maskot ±10× (untuk uji) · `?hidup=tenang` mensimulasikan *reduced motion* |
+| Parameter URL | `?demo=1` memaksa mode demo · `?jam=21` pratinjau pencahayaan jam tertentu · `?debug=1` menampilkan halangan meja, pintu, titik bernama & rute maskot · `?hidup=cepat` mempercepat semua timer perilaku maskot ±10× (untuk uji) · `?hidup=tenang` mensimulasikan *reduced motion* |
 
 ## Maskot hidup (v4)
 
@@ -57,20 +57,21 @@ Semua perilaku ini **murni visual di browser**: tidak pernah menulis ke database
 index.html                    halaman utama
 config.js                     URL + publishable key Supabase (AMAN untuk publik)
 css/style.css                 gaya UI (washi, indigo, tombol clay)
-assets/                       latar 2560×1440, potongan depan kotatsu, preview README,
-                              3 lampion, 5 maskot (+ varian mata tertutup), favicon (± 0,7 MB)
+assets/                       5 maskot (+ varian mata tertutup) untuk avatar, favicon, preview README;
+                              gambar latar 2D lama (kantor-bg, kotatsu, lampion) tidak dipakai lagi sejak v5
 js/util.js                    utilitas, format waktu WIB
 js/profiles.js                5 agen, kunci ruangan, status, jadwal fallback WIB
 js/assets.js                  pemuat gambar + pose duduk yang dibuat di kode
-js/world.js                   peta lantai, graf waypoint, titik bernama, area tooltip, skala perspektif
+js/world.js                   denah B: ruang, koridor, pintu, meja, kotatsu, fasilitas, titik bernama, rute antar-ruang
+                              (menghindari meja), area tooltip
 js/sim.js                     simulasi agen: rute, reservasi kursi, pose, squash & stretch, emote,
                               animasi idle (lirik, menguap, peregangan, kebiasaan khas), detour visual
 js/life.js                    "maskot hidup": ritme jam WIB, jalan-jalan, obrolan, giliran bicara rapat,
                               reaksi data (✨ ❗ 📝), kantuk, partikel kilau/konfeti
-js/fx.js                      suasana & cahaya: lampion, uap teh/ramen, monitor & LED yang bereaksi pada data,
-                              papan "Hari ini", pencahayaan sprite (cahaya lokal + rim light), tint siang/malam
+js/fx.js                      fase hari (jam WIB) & papan "Hari ini"
 js/data.js                    Supabase LIVE + fallback DEMO (+ deteksi database v1)
-js/app.js                     loop render, kamera cover-fit, label + gelembung aktivitas, top bar,
+js/scene3d.js                 diorama 3D (Three.js r128): kantor, taman, maskot 3D, efek data, cahaya siang/malam, kamera
+js/app.js                     loop render, kamera (overview / ruang / taman / ikuti agen), label + gelembung aktivitas, top bar,
                               sidebar dasbor (kartu agen, ringkasan, log langsung), panel T/L/K
 supabase/schema.sql           skema LENGKAP v2 untuk instalasi baru (idempotent, prefix ach_)
 supabase/migrate-v2-kantor.sql migrasi database v1 (markas bulan, 9 agen) → v2
@@ -142,16 +143,16 @@ Untuk menjalankan lokal tanpa build: `python3 -m http.server 8000`.
 
 | Kunci | Tempat | Yang terjadi |
 |---|---|---|
-| `desk` | zona kerja agen sendiri (lihat tabel agen) | duduk/berdiri di zonanya; mengetik (getar kecil) atau membaca |
-| `meeting` | kotatsu, 5 bantal (Chief selalu di kursi depan) | duduk; bergantian bicara 💬 |
+| `desk` | meja kepala di ruang divisi sendiri (agen tambahan memakai meja admin) | duduk di bantal; mengetik (getar kecil) atau membaca |
+| `meeting` | kotatsu di Ruang Chief, 20 bantal (Chief selalu di kepala meja) | duduk; bergantian bicara 💬 |
 | `tea` | stasiun teh (kyusu beruap) | berdiri di konter, menyesap ☕ |
 | `ramen` | konter ramen, 3 bangku (+2 tempat berdiri) | duduk di bangku, menyeruput 🍜 |
 | `tatami` | pojok tatami (2 tempat) | berbaring di bantal kecil, mata tertutup, "z" |
 | `vending` | vending machine | jajan 🥤 |
 | `whiteboard` | papan tulis | corat-coret ide 💡 |
-| `offline` | pintu noren | berjalan ke noren, melambai 👋, lalu redup |
+| `offline` | gerbang taman | keluar lewat pintu taman, melambai 👋, lalu redup di dekat gerbang |
 
-Kunci yang tidak dikenal dianggap `desk`. Agen dengan status `offline` selalu berada di noren. Saat lokasi berubah, maskot berjalan melalui graf waypoint di lantai: lewat koridor di belakang kotatsu, di depannya, atau di sisi kiri/kanan.
+Kunci yang tidak dikenal dianggap `desk`. Agen dengan status `offline` selalu berada di gerbang taman. Saat lokasi berubah, maskot berjalan: keluar pintu ruangnya → koridor engawa → masuk pintu ruang tujuan, memutari meja & kotatsu di dalam ruang.
 
 **Status:** `kerja` · `terjadwal` · `santai` · `istirahat` · `offline`
 

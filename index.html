@@ -32,14 +32,16 @@
   </header>
 
   <main id="stage" class="stage">
-    <canvas id="scene" aria-label="Kantor ACHPHORIA bergaya Jepang"></canvas>
+    <canvas id="gl" aria-hidden="true"></canvas>
+    <canvas id="scene" aria-label="Diorama 3D kantor ACHPHORIA bergaya Jepang: 5 ruang divisi, koridor, ruang bersama, dan taman"></canvas>
     <nav id="toolbar" class="dock" aria-label="Kontrol">
       <button data-act="board" title="Papan Tugas (T)"><b>📋</b><span class="lbl">Papan Tugas</span><kbd>T</kbd></button>
       <button data-act="log" title="Log aktivitas (L)"><b>📜</b><span class="lbl">Log</span><kbd>L</kbd></button>
       <button data-act="roster" title="Tim (K)"><b>👥</b><span class="lbl">Tim</span><kbd>K</kbd></button>
       <button data-act="home" title="Overview (0)"><b>🏠</b><span class="lbl">Overview</span><kbd>0</kbd></button>
+      <button data-act="garden" title="Taman (G)"><b>🌸</b><span class="lbl">Taman</span><kbd>G</kbd></button>
     </nav>
-    <div id="hint" class="hint">Klik maskot untuk ikuti · Scroll zoom · Seret geser · <kbd>Esc</kbd> kembali</div>
+    <div id="hint" class="hint">Klik maskot untuk ikuti · Klik ruang untuk masuk · Seret putar · Scroll zoom · <kbd>Esc</kbd> kembali</div>
   </main>
 
   <aside id="sidebar" class="sidebar" aria-label="Dasbor">
@@ -80,12 +82,14 @@
 
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" integrity="sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0qQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="js/util.js"></script>
   <script src="js/profiles.js"></script>
   <script src="js/assets.js"></script>
   <script src="js/world.js"></script>
   <script src="js/sim.js"></script>
   <script src="js/fx.js"></script>
+  <script src="js/scene3d.js"></script>
   <script src="js/data.js"></script>
   <script src="js/life.js"></script>
   <script src="js/app.js"></script>
