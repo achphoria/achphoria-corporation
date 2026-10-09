@@ -49,9 +49,10 @@
     const area = chief ? { x: r.x, w: r.w } : { x: r.x, w: r.w };
     const hw = Math.min(84, area.w - 40);
     const head = { x: area.x + area.w / 2 - hw / 2, y: r.y + 76, w: hw, h: 28 };
-    const aw = Math.min(54, (area.w - 64) / 3), gap = Math.min(22, (area.w - 40 - 3 * aw) / 2), total = 3 * aw + 2 * gap;
+    // baris meja admin menyisakan lorong di kiri-kanan supaya maskot bisa memutar ke meja kepala
+    const total = Math.min(3 * 54 + 2 * 22, area.w - 64), gap = Math.min(22, total * 0.12), aw = (total - 2 * gap) / 3;
     const ay = chief ? r.y + 142 : r.y + Math.max(162, r.h * 0.6);
-    const admins = [0, 1, 2].map((i) => { const x = area.x + area.w / 2 - total / 2 + i * (aw + gap); return { x, y: ay, w: aw, h: 20 }; });
+    const admins = [0, 1, 2].map((i) => { const x = area.x + area.w / 2 - total / 2 + i * (aw + gap); return { x, y: ay, w: aw, h: 20, m: 10 }; });
     DESKS[id] = { head, admins };
     r.obs.push(head, ...admins);
     SPOTS.home[id] = sp('home-' + id, head.x + hw / 2, head.y - 20, id, { pose: 'sit', work: true, read: id === 'research', glow: id === 'ops' || id === 'engineering' });
@@ -119,8 +120,11 @@
   function roomAt(x, y) {
     for (const r of Object.values(ROOMS)) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r.id;
     for (const h of HALLS) if (x >= h.x && x <= h.x + h.w && y >= h.y - 12 && y <= h.y + h.h + 12) return 'hall';
-    if (x < 10 || x > 1190 || y < 10 || y > 750) return 'garden';
-    return 'hall'; // celah dinding/pintu
+    if (x < 20 || x > 1180 || y < 20 || y > 740) return 'garden';
+    // celah dinding antar-ruang: anggap berada di ruang terdekat (jangan pernah memotong lewat koridor)
+    let best = null, bd = Infinity;
+    for (const r of Object.values(ROOMS)) { const dx = Math.max(r.x - x, 0, x - r.x - r.w), dy = Math.max(r.y - y, 0, y - r.y - r.h), d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = r.id; } }
+    return best;
   }
   const inFloor = (x, y) => { const r = roomAt(x, y); return r !== 'garden'; };
   // segmen a→b memotong bagian dalam persegi (Liang–Barsky)
@@ -141,12 +145,12 @@
   function roomPath(roomId, p, q) {
     const R = ROOMS[roomId];
     if (!R) return [q];
-    const obs = R.obs.map((o) => grow(o, M)).filter((o) => !inRect(p, o) && !inRect(q, o));
+    const obs = R.obs.map((o) => grow(o, o.m || M)).filter((o) => !inRect(p, o) && !inRect(q, o));
     const clear = (a, b) => obs.every((o) => !segHits(a, b, o));
     if (clear(p, q)) return [q];
     const nodes = [p, q];
     obs.forEach((o) => [[o.x - 3, o.y - 3], [o.x + o.w + 3, o.y - 3], [o.x + o.w + 3, o.y + o.h + 3], [o.x - 3, o.y + o.h + 3]].forEach((c) => {
-      if (c[0] < R.x + 8 || c[0] > R.x + R.w - 8 || c[1] < R.y + 8 || c[1] > R.y + R.h - 8) return;
+      if (c[0] < R.x + 6 || c[0] > R.x + R.w - 6 || c[1] < R.y + 6 || c[1] > R.y + R.h - 6) return;
       if (obs.some((o2) => inRect(c, o2, -0.5))) return;
       nodes.push(c);
     }));
@@ -176,7 +180,7 @@
     const b = spot.room || roomAt(spot.x, spot.y);
     const goal = [spot.x, spot.y];
     if (a === 'garden' && b === 'garden') return [goal];
-    if (a === 'garden') { pts.push(P(EXIT.out), P(EXIT.door), P(EXIT.inn)); cur = EXIT.inn; a = 'common'; }
+    if (a === 'garden') { if (y > EXIT.out[1] || Math.abs(x - EXIT.out[0]) > 40) pts.push(P(EXIT.out)); pts.push(P(EXIT.door), P(EXIT.inn)); cur = EXIT.inn; a = 'common'; }
     const tRoom = b === 'garden' ? 'common' : b;
     const target = b === 'garden' ? EXIT.inn : goal;
     if (a === tRoom) pts.push(...roomPath(a, cur, target));
@@ -200,7 +204,7 @@
       const x = target.x + dx, y = target.y + dy;
       if (roomAt(x, y) !== room) continue;
       if (x < R.x + 14 || x > R.x + R.w - 14 || y < R.y + 14 || y > R.y + R.h - 14) continue;
-      if (R.obs.some((o) => inRect([x, y], grow(o, M - 2)))) continue;
+      if (R.obs.some((o) => inRect([x, y], grow(o, (o.m || M) - 2)))) continue;
       return sp('visit-' + target.id, x, y, room, { face: dx > 0 ? -1 : 1, face3: toward(x, y, target.x, target.y) });
     }
     return null;

@@ -289,7 +289,7 @@
   }
   const pickActor = (e) => (S3.ok ? S3.actorAt(e.clientX, e.clientY, sim.actors) : null);
 
-  scene.addEventListener('pointerdown', (e) => { tip.hidden = true; down = { x: e.clientX, y: e.clientY }; dragged = false; scene.setPointerCapture(e.pointerId); S3.dragStart && S3.dragStart(); });
+  scene.addEventListener('pointerdown', (e) => { tip.hidden = true; down = { x: e.clientX, y: e.clientY }; dragged = false; scene.setPointerCapture(e.pointerId); S3.dragStart(); });
   scene.addEventListener('pointermove', (e) => {
     if (!S3.ok) return;
     if (down) {
@@ -317,7 +317,7 @@
     scene.style.cursor = 'grab';
     if (!down) return;
     const wasDrag = dragged; down = null;
-    S3.dragEnd && S3.dragEnd();
+    S3.dragEnd();
     if (wasDrag || !S3.ok) return;
     const a = pickActor(e);
     if (a) return follow(a.id);
@@ -623,7 +623,7 @@
   /* ---------------- start ---------------- */
   function start() {
     if (app.started) return;
-    if (!S3.init || !S3.init(gl, stage)) {
+    if (!S3.init(gl, stage)) {
       const m = document.createElement('div'); m.className = 'nogl';
       m.innerHTML = '<b>Kantor 3D tidak bisa ditampilkan</b><span>' + esc(S3.error || 'WebGL tidak tersedia') + '. Dasbor di samping tetap terbarui LIVE.</span>';
       stage.appendChild(m);

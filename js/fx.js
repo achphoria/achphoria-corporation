@@ -19,13 +19,12 @@
   setInterval(() => (phase = fx.dayPhase()), 30000);
   fx.phase = () => phase;
 
-  // papan "HARI INI · 本日" di papan tulis ruang bersama
+  // papan "HARI INI · 本日" di papan tulis ruang bersama (scene3d menyimpan nilai terakhir bila belum siap)
   let lastBoard = '';
   fx.setBoard = function (info) {
     const key = JSON.stringify(info || {});
     if (key === lastBoard) return;
     lastBoard = key;
-    if (ACH.scene3d && ACH.scene3d.ok) ACH.scene3d.setBoard(info);
-    else setTimeout(() => { lastBoard = ''; fx.setBoard(info); }, 1500); // scene belum siap → coba lagi
+    if (ACH.scene3d) ACH.scene3d.setBoard(info);
   };
 })();

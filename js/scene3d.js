@@ -3,7 +3,10 @@
    40 piksel denah = 1 unit dunia. Label & gelembung tetap digambar app.js di kanvas overlay 2D. */
 (function () {
   const ACH = window.ACH, world = ACH.world;
-  const S3 = (ACH.scene3d = { ok: false });
+  // stub aman: bila Three.js/WebGL tidak ada, dasbor tetap jalan dan semua panggilan kamera jadi no-op
+  const noop = () => {};
+  const S3 = (ACH.scene3d = { ok: false, K: 0, init: () => false, resize: noop, frame: noop, home: noop, focusRoom: noop, garden: noop, follow: noop, followMul: noop, zoomBy: noop,
+    dragStart: noop, dragMove: noop, dragEnd: noop, setBoard: noop, mode: () => 'home', project: () => [0, 0, false], headOf: () => [0, 0], pxPerPlan: () => 1, planAt: () => null, actorAt: () => null, roomLabels: () => [] });
   if (!window.THREE) { S3.error = 'Three.js gagal dimuat'; return; }
   const T = window.THREE;
   const W = ACH.W, H = ACH.H, S = 1 / 40, FY = 0.12, GY = -0.12;
@@ -116,7 +119,7 @@
     const body = mesh(new T.SphereGeometry(r, 20, 16), m, false); body.scale.set(1, 1.3, 1); g.add(body);
     g.add(at(mesh(new T.CylinderGeometry(r * 0.55, r * 0.55, 0.06, 16), M.iron, false), 0, r * 1.25, 0)); g.add(at(mesh(new T.CylinderGeometry(r * 0.5, r * 0.5, 0.05, 16), M.iron, false), 0, -r * 1.25, 0));
     g.add(at(mesh(new T.CylinderGeometry(0.01, 0.01, 1.4, 4), M.iron, false), 0, r * 1.3 + 0.7, 0));
-    const pl = new T.PointLight(lin('#ffb866'), big ? 0.9 : 0.5, big ? 9 : 6, 2); g.add(pl);
+    const pl = S3.low ? null : new T.PointLight(lin('#ffb866'), big ? 0.9 : 0.5, big ? 9 : 6, 2); if (pl) g.add(pl);
     g.userData = { m, pl, base: big ? 0.9 : 0.5 }; return at(g, x, y, z);
   }
   function wallSeg(x1, z1, x2, z2, h, m) { const len = Math.hypot(x2 - x1, z2 - z1); if (len < 0.05) return null;
@@ -382,7 +385,7 @@
       if (m && color && color !== m.color) { m.mats.body.color.copy(lin(color)); m.ring.material.color.copy(lin(color)); m.color = color; }
       if (!m) { m = agentMesh(a); actors.set(a, m); m.heading = a.at && a.at.face3 != null ? a.at.face3 : 0; }
     });
-    for (const [a, m] of actors) if (!seen.has(a)) { scene.remove(m.g); actors.delete(a); }
+    for (const [a, m] of actors) if (!seen.has(a)) { scene.remove(m.g); Object.values(m.mats).forEach((x) => x.dispose()); m.ring.material.dispose(); actors.delete(a); }
   }
   const angleLerp = (a, b, k) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.cos(d)); return a + d * k; };
   function groundY(a) { return world.roomAt(a.x, a.y) === 'garden' ? GY : FY; }
@@ -392,7 +395,10 @@
     // arah hadap
     let hd = m.heading;
     if (a.walking && a.path.length) { const [tx, ty] = a.path[0]; if (Math.hypot(tx - a.x, ty - a.y) > 0.5) hd = Math.atan2(tx - a.x, ty - a.y); }
-    else if (a.lookFace) hd = (a.at && a.at.face3 != null ? a.at.face3 : 0) * 0.35 + a.lookFace * 1.15;
+    else if (a.lookFace) {
+      const other = a.chat ? (a.chat.a === a ? a.chat.b : a.chat.a) : a.inMeeting ? ACH.sim.actors.find((o) => o !== a && o.inMeeting && o.speakT > 0) : null;
+      hd = other ? Math.atan2(other.x - a.x, other.y - a.y) : (a.at && a.at.face3 != null ? a.at.face3 : 0) + a.lookFace * 0.6;
+    }
     else if (a.at && a.at.face3 != null) hd = a.at.face3;
     if (pose === 'lie') hd = 0;
     m.heading = angleLerp(m.heading, hd, Math.min(1, dt * 9));
@@ -414,7 +420,8 @@
     const al = a.alpha;
     if (Math.abs(al - m.alpha) > 0.01) {
       m.alpha = al;
-      Object.values(m.mats).forEach((mt) => { mt.transparent = al < 0.98; mt.opacity = al; mt.depthWrite = al >= 0.98; mt.needsUpdate = true; });
+      const tr = al < 0.98;
+      Object.values(m.mats).forEach((mt) => { if (mt.transparent !== tr) { mt.transparent = tr; mt.depthWrite = !tr; mt.needsUpdate = true; } mt.opacity = al; });
     }
     m.ring.visible = a === mark;
     if (m.ring.visible) { m.ring.scale.setScalar(1 + 0.05 * Math.sin(t * 4)); m.ring.position.y = 0.02 - lift / AG_SCALE + (pose === 'lie' ? 0 : 0); }
@@ -460,9 +467,9 @@
     sun.color.copy(sunCol); sun.intensity = 1.25 * (1 - night * 0.78) * (1 - gold * 0.1);
     hemi.intensity = 0.55 * (1 - night * 0.5); amb.intensity = 0.12 + night * 0.05;
     const lamp = 0.85 + night * 0.9 + gold * 0.3;
-    FX.lanterns.forEach((l, i) => { l.userData.m.emissiveIntensity = lamp; l.userData.pl.intensity = l.userData.base * (0.6 + night * 1.6); l.rotation.z = RM() ? 0 : Math.sin(t * 1.3 + i) * 0.04; });
+    FX.lanterns.forEach((l, i) => { l.userData.m.emissiveIntensity = lamp; if (l.userData.pl) l.userData.pl.intensity = l.userData.base * (0.6 + night * 1.6); l.rotation.z = RM() ? 0 : Math.sin(t * 1.3 + i) * 0.04; });
     const L = FX.chiefLantern, pulse = 0.9 + night * 0.6 + react.meet * (0.6 + 0.35 * Math.sin(t * 5));
-    L.userData.m.emissiveIntensity = pulse; L.userData.pl.intensity = pulse * (0.9 + night);
+    L.userData.m.emissiveIntensity = pulse; if (L.userData.pl) L.userData.pl.intensity = pulse * (0.9 + night);
     OUT.toro.forEach((m, i) => (m.emissiveIntensity = 0.6 + night * 1.0 + Math.sin(t * 2 + i * 1.7) * 0.12));
     stage.classList.toggle('night', night > 0.5);
   }
@@ -481,7 +488,7 @@
   /* ---------------- kamera ---------------- */
   const VIEW = 12;
   const cur = { target: new T.Vector3(), zoom: 1, yaw: -0.5, pitch: 0.92 }, goal = { target: new T.Vector3(), zoom: 1, yaw: -0.5, pitch: 0.92 };
-  let mode = { kind: 'home' }, homeZoom = 1;
+  let mode = { kind: 'home' }, homeZoom = 1, zoomMul = 1;
   function poseCam(c, st) { const R = 60; c.position.set(st.target.x + Math.sin(st.yaw) * Math.cos(st.pitch) * R, st.target.y + Math.sin(st.pitch) * R, st.target.z + Math.cos(st.yaw) * Math.cos(st.pitch) * R); c.lookAt(st.target); }
   function setFrustum(c) { const sw = stage.clientWidth || 1, sh = stage.clientHeight || 1, a = sw / sh; c.left = (-VIEW * a) / 2; c.right = (VIEW * a) / 2; c.top = VIEW / 2; c.bottom = -VIEW / 2; c.updateProjectionMatrix(); }
   function fit(x1, x2, z1, z2, h, pad) {
@@ -499,18 +506,19 @@
     fit(-16.5, 16.5, -11, narrow ? 12 : 13.5, 1.6, narrow ? 1.12 : 1.03); homeZoom = goal.zoom;
     if (mode.kind === 'room') { const r = world.ROOMS[mode.id]; fit(wx(r.x), wx(r.x + r.w), wz(r.y), wz(r.y + r.h), 1.6, 1.14); }
     else if (mode.kind === 'garden') fit(-21.5, 21.5, -14.5, 17, 3, 1.03);
+    goal.zoom *= zoomMul;
   }
-  S3.home = () => { mode = { kind: 'home' }; refit(); };
-  S3.focusRoom = (id) => { if (!world.ROOMS[id]) return; mode = { kind: 'room', id }; refit(); };
-  S3.garden = () => { mode = { kind: 'garden' }; refit(); };
+  S3.home = () => { mode = { kind: 'home' }; zoomMul = 1; refit(); };
+  S3.focusRoom = (id) => { if (!world.ROOMS[id]) return; mode = { kind: 'room', id }; zoomMul = 1; refit(); };
+  S3.garden = () => { mode = { kind: 'garden' }; zoomMul = 1; refit(); };
   S3.follow = (a, mul) => { mode = { kind: 'follow', a, mul: mul || 1 }; };
   S3.followMul = (f) => { if (mode.kind === 'follow') mode.mul = Math.min(2.4, Math.max(0.55, mode.mul * f)); };
   S3.mode = () => mode.kind;
-  S3.zoomBy = (f) => { if (mode.kind === 'follow') return S3.followMul(f); goal.zoom = Math.min(homeZoom * 6, Math.max(homeZoom * 0.7, goal.zoom * f)); };
+  S3.zoomBy = (f) => { if (mode.kind === 'follow') return S3.followMul(f); const z = Math.min(homeZoom * 6, Math.max(homeZoom * 0.7, goal.zoom * f)); zoomMul *= z / goal.zoom; goal.zoom = z; };
   let dragStart = null;
   S3.dragStart = () => (dragStart = { yaw: goal.yaw, pitch: goal.pitch });
   S3.dragMove = (dx, dy) => { if (!dragStart) return; goal.yaw = dragStart.yaw - dx * 0.006; goal.pitch = Math.min(1.3, Math.max(0.5, dragStart.pitch + dy * 0.004)); };
-  S3.dragEnd = () => { dragStart = null; if (mode.kind !== 'follow') { const z = goal.zoom, tg = goal.target.clone(); refit(); if (mode.kind === 'home' && Math.abs(z - homeZoom) > 0.02) { goal.zoom = z; goal.target.copy(tg); } } };
+  S3.dragEnd = () => { dragStart = null; if (mode.kind !== 'follow') refit(); };
 
   /* ---------------- proyeksi & picking ---------------- */
   const pv = new T.Vector3();
@@ -522,7 +530,7 @@
   // kepala maskot (untuk label & gelembung)
   S3.headOf = (a) => { const m = actors.get(a); if (!m) return S3.project(a.x, a.y, 1.2); pv.set(m.g.position.x, m.g.position.y + (m.inner.position.y + 0.78 * m.inner.scale.y) * AG_SCALE, m.g.position.z).project(camera); return [((pv.x + 1) / 2) * stage.clientWidth, ((1 - pv.y) / 2) * stage.clientHeight]; };
   // berapa piksel CSS per piksel denah (skala label & partikel)
-  S3.pxPerPlan = () => { const a = S3.project(600, 380, 0), b = S3.project(640, 380, 0); return Math.hypot(b[0] - a[0], b[1] - a[1]) / 40; };
+  S3.pxPerPlan = () => (camera.zoom * (stage.clientHeight || 1)) / VIEW / 40;
   const ray = new T.Raycaster(), ndc = new T.Vector2(), plane = new T.Plane(new T.Vector3(0, 1, 0), -FY), hitP = new T.Vector3();
   S3.planAt = (clientX, clientY) => {
     const r = stage.getBoundingClientRect(); ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
@@ -547,9 +555,11 @@
     const [x, y, vis] = S3.project(r.x + 8, r.y + r.h - 6, 0.5);
     return { id: r.id, x, y, vis, kanji: prof ? prof.kanji : '共用', name: prof ? prof.name : 'Ruang Bersama', color: prof ? prof.color : '#c9a77a' };
   });
-  S3.setBoard = (info) => { if (!FX || !FX.board) return; const old = FX.board.map; FX.board.map = boardTex(info); FX.board.needsUpdate = true; if (old) old.dispose(); };
+  let pendingBoard = null;
+  S3.setBoard = (info) => { if (!FX || !FX.board) { pendingBoard = info; return; } const old = FX.board.map; FX.board.map = boardTex(info); FX.board.needsUpdate = true; if (old) old.dispose(); };
 
   /* ---------------- siklus hidup ---------------- */
+  ['home', 'focusRoom', 'garden', 'follow', 'followMul', 'zoomBy', 'dragStart', 'dragMove', 'dragEnd'].forEach((k) => { const f = S3[k]; S3[k] = (...args) => (S3.ok ? f(...args) : undefined); });
   S3.init = function (canvas, stageEl) {
     stage = stageEl;
     try {
@@ -565,8 +575,9 @@
     sun = new T.DirectionalLight(lin('#ffe3bd'), 1.25); sun.position.set(-9, 22, 13); sun.castShadow = !low;
     sun.shadow.mapSize.set(low ? 1024 : 3072, low ? 1024 : 3072); Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 21, bottom: -21, near: 1, far: 70 }); sun.shadow.bias = -0.0006;
     scene.add(sun); amb = new T.AmbientLight(lin('#ffe9cf'), 0.12); scene.add(amb);
-    initShared(); build();
-    S3.ok = true; S3.low = low;
+    S3.low = low; initShared(); build();
+    S3.ok = true;
+    if (pendingBoard) S3.setBoard(pendingBoard);
     S3.resize(); Object.assign(cur, { zoom: goal.zoom, yaw: goal.yaw, pitch: goal.pitch }); cur.target.copy(goal.target);
     return true;
   };
